@@ -27,23 +27,23 @@
 #   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF 
 #   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from .gpio import GPIO
 from .mmio import MMIO
 from .uio import UioController
-from .ps import Register
-from .ps import Clocks
-from .pl import PL
-from .pl import PL_SERVER_FILE
-from .pl import Bitstream
-from .ps import Register
-from .ps import Clocks
-from .interrupt import Interrupt
 from .xlnk import Xlnk
+from .pl import PL
+from .ps import Register
+from .ps import Clocks
+from .gpio import GPIO
+from .devicetree import DeviceTreeSegment
+from .interrupt import Interrupt
+from .bitstream import Bitstream
 from .overlay import Overlay
 from .overlay import DefaultHierarchy
 from .overlay import DefaultIP
 from .pmbus import get_rails
 from .pmbus import DataRecorder
+from .buffer import allocate
+from .pl_server import Device
 from . import lib
 
 
@@ -52,4 +52,5 @@ __copyright__ = "Copyright 2016, Xilinx"
 __email__ = "pynq_support@xilinx.com"
 
 __all__ = ['lib', 'tests']
-__version__ = '2.4'
+__version__ = '2.5.1'
+__git_commit__ = "$Id$"

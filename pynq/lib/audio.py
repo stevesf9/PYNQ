@@ -110,7 +110,7 @@ class AudioDirect(DefaultIP):
                                     unsigned int * BufAddr, 
                                     unsigned int Num_Samles_32Bit);""")
         
-        char_adrp = self._ffi.from_buffer(self.mmio.mem)
+        char_adrp = self._ffi.from_buffer(self.mmio.array)
         self._uint_adrpv = self._ffi.cast('unsigned int', char_adrp)
         
         self.buffer = numpy.zeros(0).astype(numpy.int)
@@ -345,10 +345,10 @@ class AudioADAU1761(DefaultIP):
                           unsigned int nsamples, 
                           int uio_index, int iic_index) ;""")
         self._ffi.cdef("""void record(unsigned int audio_mmap_size,
-                          unsigned int BufAddr, unsigned int nsamples, 
+                          unsigned int * BufAddr, unsigned int nsamples,
                           int uio_index, int iic_index);""")
         self._ffi.cdef("""void play(unsigned int audio_mmap_size,
-                          unsigned int BufAddr, unsigned int nsamples, 
+                          unsigned int * BufAddr, unsigned int nsamples,
                           int uio_index, int iic_index);""")
 
         self.buffer = numpy.zeros(0).astype(numpy.int32)
@@ -442,7 +442,7 @@ class AudioADAU1761(DefaultIP):
         # Create data buffer
         self.buffer = numpy.zeros(num_samples_32b, dtype=numpy.int32)
         char_buffer = self._ffi.from_buffer(self.buffer)
-        uint_buffer = self._ffi.cast('unsigned int', char_buffer)
+        uint_buffer = self._ffi.cast('unsigned int*', char_buffer)
 
         # Record
         self._libaudio.record(self.mmio.length, uint_buffer,
@@ -460,7 +460,7 @@ class AudioADAU1761(DefaultIP):
 
         """
         char_buffer = self._ffi.from_buffer(self.buffer)
-        uint_buffer = self._ffi.cast('unsigned int', char_buffer)
+        uint_buffer = self._ffi.cast('unsigned int*', char_buffer)
 
         self._libaudio.play(self.mmio.length, uint_buffer,
                             self.sample_len, self.uio_index, self.iic_index)

@@ -34,7 +34,7 @@ Hit *Enter* in the terminal window to make sure you can see the command prompt:
 
 .. code-block:: console
     
-    xilinnx@pynq:/home/xilinx#
+    xilinx@pynq:/home/xilinx#
 
 You can then run the same commands listed above to change the hostname, or configure a proxy. 
 
@@ -49,5 +49,3 @@ You can also check the IP address of the board using *ifconfig*:
 .. code-block:: console
     
     ifconfig
-
-.. _microsd-card-setup:

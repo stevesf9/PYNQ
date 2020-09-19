@@ -134,7 +134,7 @@ class AxiGPIO(DefaultIP):
             """
             if val > self._mask:
                 raise ValueError("{} too large for {} bits"
-                                 .format(val, self.stop - self.start))
+                                 .format(val, self._stop - self._start))
             self._parent.write(val << self._start, self._mask << self._start)
 
         def on(self):
@@ -234,7 +234,7 @@ class AxiGPIO(DefaultIP):
             """Set the state of the output pins
 
             """
-            self.val = (self.val & ~mask) | val
+            self.val = (self.val & ~mask) | (val & mask)
             self._parent.write(self._channel * 8, self.val)
 
         def read(self):

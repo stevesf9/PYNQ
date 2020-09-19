@@ -7,7 +7,7 @@ sources of the other constituent parts.
 
 It's highly recommended to run these scripts inside of a virtual machine. The
 image building requires doing a lot of things as root and while every effort
-has been made to ensure it doesn't break the world this is far from guarenteed.
+has been made to ensure it doesn't break the world this is far from guaranteed.
 This flow must be run in a Debian or Ubuntu based Linux distribution and has
 been tested on Ubuntu 16.04. Other versions should work but may required
 different or additional packages. The build process is optimised for 4-cores
@@ -188,6 +188,29 @@ To generate the Petalinux BSP for future use:
 
 ```Makefile
 make bsp BOARDDIR=<absolute_path>/myboards
+```
+
+To build the board-agnostic images and sysroot you can pass the `ARCH_ONLY`
+variable to make. This will cause the `images` target to build the architecture
+image.
+
+```Makefile
+make images ARCH_ONLY=arm
+```
+
+To use a board-agnostic image to build a board-specific image you can pass the
+`PREBUILT` variable:
+
+```Makefile
+make PREBUILT=<image path> BOARDS=<board>
+```
+
+To use a previously built PYNQ source distribution tarball you can pass the 
+`PYNQ_SDIST` variable. This will also avoid having to rebuild bitstreams 
+(except for external boards) and MicroBlazes' bsps and binaries.
+
+```Makefile
+make PYNQ_SDIST=<sdist tarball path>
 ```
 
 ## Custom Ubuntu Repository

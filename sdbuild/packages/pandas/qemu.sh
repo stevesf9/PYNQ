@@ -1,4 +1,3 @@
-export PATH=/opt/python3.6/bin:$PATH
 export HOME=/root
 
 set -x
@@ -7,7 +6,7 @@ iter_count=0
 max_iterations=3
 
 read -d '' PACKAGES <<EOT
-pandas
+pandas==0.22.0
 EOT
 
 while [ -n "$PACKAGES" -a "$max_iterations" != "$iter_count" ];

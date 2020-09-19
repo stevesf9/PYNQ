@@ -8,12 +8,12 @@ EMBEDDEDSW_DIR ?= embeddedsw
 # SRC - source files to include in the library
 # INC - include directory with the -I prefix
 
-# ARCH := $(shell uname -p)
 PYNQ_BUILD_ARCH ?= $(shell uname -p)
 ESW_SRC := $(filter-out %_g.c, $(foreach lib, $(ESW_LIBS), $(wildcard $(EMBEDDEDSW_DIR)/XilinxProcessorIPLib/drivers/$(lib)/src/*.c)))
 ESW_INC := $(patsubst %, -I$(EMBEDDEDSW_DIR)/XilinxProcessorIPLib/drivers/%/src, $(ESW_LIBS))
 OS_INC := -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/common -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/arm/common/gcc -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/arm/common
-OS_INC_aarch64 := -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/arm/cortexa53/64bit 
+OS_INC_aarch64 := -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/arm/ARMv8/64bit/
+OS_INC_aarch64 += -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/arm/ARMv8/64bit/platform/ZynqMP/
 OS_INC_armv7l := -I$(EMBEDDEDSW_DIR)/lib/bsp/standalone/src/arm/cortexa9/
 COMMON_SRC := $(wildcard common/*.c)
 COMMON_SRC_aarch64 := $(wildcard common/aarch64/*.c)

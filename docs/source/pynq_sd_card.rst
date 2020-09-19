@@ -4,9 +4,9 @@
 PYNQ SD Card
 ************
 
-The PYNQ image for supported boards are provided precompiled as 
+The PYNQ images for supported boards are provided precompiled as 
 downloadable SD card images, so you do not need to rerun this flow for these 
-boards unless you want to make changes to the image flow.
+boards unless you want to make changes to the image.
 
 This flow can also be used as a starting point to build a PYNQ image for another
 Zynq / Zynq Ultrascale board.
@@ -26,14 +26,24 @@ in the folder above.
 Prepare the Building Environment
 ================================
 
-It is recommended to use a Ubuntu OS to build the image. If you do not have a 
-Ubuntu OS, you may need to prepare a Ubuntu virtual machine (VM) on your host OS.
-We provide in our repository a *vagrant* file that can help you install the 
-Ubuntu VM on your host OS.
+It is recommended to use a Ubuntu OS to build the image. The currently supported Ubuntu OS are listed below:
+
+================  ==================
+Supported OS      Code name
+================  ==================   
+Ubuntu 16.04       xenial
+Ubuntu 18.04       bionic
+================  ==================
+
+Use Vagrant to prepare Ubuntu OS
+--------------------------------
+If you do not have a Ubuntu OS, you may need to prepare a Ubuntu virtual 
+machine (VM) on your host OS. We provide in our repository a *vagrant* file 
+that can help you install the Ubuntu VM on your host OS.
 
 If you do not have a Ubuntu OS, and you need a Ubuntu VM, do the following:
 
-  1. Download the `vagrant software <https://www.vagrantup.com/>`_ and the 
+  1. Download the `vagrant software <https://www.vagrantup.com/>`_ and 
      `Virtual Box <https://www.virtualbox.org/>`_. Install them on your host OS.
   2. In your host OS, open a terminal program. Locate your PYNQ repository, 
      where the vagrant file is stored.
@@ -42,28 +52,69 @@ If you do not have a Ubuntu OS, and you need a Ubuntu VM, do the following:
     
         cd <PYNQ repository>
 
-  3. You can then prepare the VM using the following command. This step will
-     prepare a Ubuntu VM called *pynq_vm* on your Virtual Box. For this VM,
-     username and password are both defaulted to *vagrant*. The Ubuntu 
-     packages on the VM will be updated during this process; the Ubuntu desktop 
-     will also be installed so you can install Xilinx software later.
+  3. (optional) Depending on your Virtual Box configurations, you may 
+     need to run the following command first; it may help you get better 
+     screen resolution for your Ubuntu VM.
+
+     .. code-block:: console
+
+        vagrant plugin install vagrant-vbguest
+
+  4. You can then prepare the VM using the following command. This step will
+     prepare a Ubuntu VM called *pynq_ubuntu_<version>* on your Virtual Box.
+     The Ubuntu packages on the VM will be updated during this process; 
+     the Ubuntu desktop will also be installed so you can install Xilinx 
+     software later.
 
      .. code-block:: console
     
         vagrant up
 
-     After the VM has been successfully loaded, you will see a folder
-     */pynq* on your VM; this folder is shared with your PYNQ repository on 
-     your host OS.
-  4. (optionally) To restart the VM without losing the shared folder, in your 
-     terminal, run:
-
+     The above command will take about 20 minutes to finish.
+     By default, our vagrant file will prepare a Ubuntu 16.04 OS. If you would
+     like to use another OS, do:
+     
      .. code-block:: console
     
-        vagrant reload
+        vagrant up <ubuntu_code_name>
 
-  5. Now you are ready to install Xilinx tools. You will need 
-     PetaLinux, Vivado, and SDx for building PYNQ image.
+     For example, you can do the following to prepare a Ubuntu 18.04 OS:
+     
+     .. code-block:: console
+    
+        vagrant up bionic
+
+     The supported OS and their corresponding code names are listed in the 
+     beginning of this section.
+
+  5. In the end, you will see a Virtual Box window popped up with only shell 
+     terminal, asking for your Ubuntu login information. 
+     Ignore this window and close it. Run the following command on your host:
+     
+     .. code-block:: console
+    
+        vagrant reload <ubuntu_code_name>
+     
+     After running the above command, you will be asked to log onto your 
+     Ubuntu desktop. The username and password are both defaulted to *vagrant*.
+     The current working directory on your host machine will be shared with 
+     */pynq* on your VM. Always use *vagrant reload* command to reboot the VM;
+     otherwise vagrant has no clue whether the VM has been rebooted, and users
+     will not be able to see shared folder.
+
+  6. (optional) You can enable bidirectional clipboard between your host and 
+     your VM in your Virtual Box settings:
+
+     .. image:: ./images/bidirectional-clipboard.png
+     :width: 400
+
+  7. Now you are ready to install Xilinx tools. You will need 
+     PetaLinux, Vivado, and SDK for building PYNQ image.
+     Do not install Xilinx tools into */pynq* since it is only a small shared
+     folder. Instead, a 160GB disk space will be allocated at */workspace*
+     folder in VM. Install Xilinx tools there.
+     
+     Starting from image v2.5, SDx is no longer needed.
      The version of Xilinx tools for each PYNQ release is shown below:
 
      ================  ================
@@ -75,9 +126,13 @@ If you do not have a Ubuntu OS, and you need a Ubuntu VM, do the following:
      v2.2               2017.4
      v2.3               2018.2
      v2.4               2018.3
+     v2.5               2019.1
      ================  ================
 
-If you already have a Ubuntu OS, you can do the following:
+Use existing Ubuntu OS
+----------------------
+If you already have a Ubuntu OS, and it is listed in the beginning of
+this section, you can simply do the following:
 
   1. Install dependencies using the following script. This is necessary 
      if you are not using our vagrant file to prepare the environment.
@@ -87,16 +142,25 @@ If you already have a Ubuntu OS, you can do the following:
         <PYNQ repository>/sdbuild/scripts/setup_host.sh
 
   2. Install correct version of the Xilinx tools, including 
-     PetaLinux, Vivado, and SDx. See the above table for the correct version 
+     PetaLinux, Vivado, and SDK. See the above table for the correct version 
      of each release.
 
 Building the Image
 ==================
 
 Once you have the building environment ready, you can start to build the image 
-following the steps below:
+following the steps below. You don't have to rerun the `setup_host.sh`.
 
-  1. Source the appropriate settings files from PetaLinux, Vivado, and SDx.
+  1. Source the appropriate settings for PetaLinux, Vivado, 
+     and SDK. Suppose you are using Xilinx 2019.1 tools:
+
+     .. code-block:: console
+
+        source <path-to-vivado>/Vivado/2019.1/settings64.sh
+        source <path-to-sdk>/SDK/2019.1/settings64.sh
+        source <path-to-petalinux>/petalinux-v2019.1-final/settings.sh
+        petalinux-util --webtalk off
+
   2. Navigate to the following directory and run make
 
      .. code-block:: console
@@ -106,6 +170,41 @@ following the steps below:
 
 The build flow can take several hours. By default images for all of the
 supported boards will be built.
+
+Using the prebuilt board-agnostic image
+---------------------------------------
+In order to simplify and speed-up the image building process, you can re-use the 
+prebuilt board-agnostic image appropriate to the architecture - arm for Zynq-7000 
+and aarch64 for Zynq UltraScale+, downloadable at the 
+`boards page <http://www.pynq.io/board.html/>`_ of our website. This will allow 
+you to completely skip the board-agnostic stage. It is important to notice however
+that this will restrict the build process to only boards that share the same
+architecture. You can do so by passing the ``PREBUILT`` variable when invoking make:
+
+.. code-block:: console
+    
+   cd <PYNQ repository>/sdbuild/
+   make PREBUILT=<image path> BOARDS=<board>
+
+Re-use the PYNQ source distribution tarball
+-------------------------------------------
+To avoid rebuilding the PYNQ source distribution package, and consequently bypass
+the need to build bitstreams (except for external boards) and MicroBlazes' bsps 
+and binaries, a prebuilt PYNQ sdist tarball can be reused by specifying the 
+``PYNQ_SDIST`` variable when invoking make. The tarball specific to the target
+PYNQ version will be distributed when a new version is released on 
+`GitHub <https://github.com/Xilinx/PYNQ/releases>`_.
+
+.. code-block:: console
+    
+   cd <PYNQ repository>/sdbuild/
+   make PYNQ_SDIST=<sdist tarball path>
+
+
+Please also refer to the 
+`sdbuild readme <https://github.com/Xilinx/PYNQ/blob/master/sdbuild/README.md>`_
+on our GitHub repository for more info regarding the image-build flow.
+
 
 Retargeting to a Different Board
 ================================

@@ -36,7 +36,7 @@ import cffi
 import functools
 import os
 import numpy as np
-from pynq.xlnk import ContiguousArray, Xlnk
+from pynq.buffer import PynqBuffer
 from pynq.ps import CPU_ARCH, ZU_ARCH
 from .constants import LIB_SEARCH_PATH
 
@@ -139,12 +139,11 @@ class DrmDriver:
         if not pixelformat.fourcc:
             raise ValueError("pixelformat does not define a FourCC")
         ret = self._videolib.pynqvideo_device_set_mode(
-            self._device, mode.width, mode.height, 60,
+            self._device, mode.width, mode.height, mode.fps,
             _fourcc_int(pixelformat.fourcc))
         if ret:
             raise OSError(ret)
         self._mode = mode
-        self._xlnk = Xlnk()
 
     def start(self):
         """Dummy function to match the HDMI interface
@@ -174,7 +173,7 @@ class DrmDriver:
 
         Returns
         -------
-        pynq.ContiguousArray : numpy.ndarray mapped to a hardware frame
+        pynq.PynqBuffer : numpy.ndarray mapped to a hardware frame
 
         """
         frame_pointer = self._videolib.pynqvideo_frame_new(self._device)
@@ -193,9 +192,9 @@ class DrmDriver:
             raw_array = np.frombuffer(buffer, dtype='u1').reshape(
                     [self._mode.shape[0], data_stride])
             array = raw_array[:,0:expected_stride].reshape(self._mode.shape)
-        view = array.view(ContiguousArray)
+        view = array.view(PynqBuffer)
         view.pointer = frame_pointer
-        view.physical_address = data_physaddr
+        view.device_address = data_physaddr
         view.return_to = self
         return view
 

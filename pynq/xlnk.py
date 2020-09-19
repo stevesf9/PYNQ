@@ -31,6 +31,7 @@ __author__ = "Anurag Dubey"
 __copyright__ = "Copyright 2016, Xilinx"
 __email__ = "pynq_support@xilinx.com"
 
+import re
 import os
 import signal
 import sys
@@ -40,80 +41,15 @@ import functools
 import numbers
 import warnings
 import numpy as np
-from .ps import CPU_ARCH_IS_SUPPORTED, CPU_ARCH
+from .buffer import PynqBuffer
 
+ContiguousArray = PynqBuffer
 
 def sig_handler(signum, frame):
     print("Invalid Memory Access!")
     Xlnk().xlnk_reset()
     sys.exit(127)
 signal.signal(signal.SIGSEGV, sig_handler)
-
-
-class ContiguousArray(np.ndarray):
-    """A subclass of numpy.ndarray which is allocated using
-    physically contiguous memory for use with DMA engines and
-    hardware accelerators. As physically contiguous memory is a
-    limited resource it is strongly recommended to free the
-    underlying buffer with `close` when the buffer is no longer
-    needed. Alternatively a `with` statement can be used to
-    automatically free the memory at the end of the scope.
-
-    This class should not be constructed directly and instead
-    created using `Xlnk.cma_array`.
-
-    Attributes
-    ----------
-    pointer: cdata void*
-        The virtual address pointer to the memory location
-    physical_address: int
-        The physical address to the array
-
-    """
-    def __del__(self):
-        self.freebuffer()
-
-    def freebuffer(self):
-        """Free the underlying memory
-
-        This will free the memory regardless of whether other objects
-        may still be using the buffer so ensure that no other references
-        to the array exist prior to freeing.
-
-        """
-        if hasattr(self, 'pointer') and self.pointer:
-            if self.return_to:
-                self.return_to.return_pointer(self.pointer)
-            self.pointer = 0
-
-    def close(self):
-        """Free the underlying memory
-
-        See `freebuffer` for more details
-
-        """
-        self.freebuffer()
-
-    def flush(self):
-        """Flush the underlying memory if necessary
-
-        """
-        if self.cacheable:
-            Xlnk.libxlnk.cma_flush_cache(self.pointer, self.physical_address, self.nbytes)
-
-    def invalidate(self):
-        """Invalidate the underlying memory if necessary
-
-        """
-        if self.cacheable:
-            Xlnk.libxlnk.cma_invalidate_cache(self.pointer, self.physical_address, self.nbytes)
-
-    def __enter__(self):
-        return self
-        
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.freebuffer()
-        return 0
 
 
 class Xlnk:
@@ -310,6 +246,12 @@ class Xlnk:
         self.__check_buftype(buf)
         return self.ffi.buffer(buf, length)
     
+    def allocate(self, *args, **kwargs):
+        """Wrapper for cma_array to match Xlnk to new Memory API
+
+        """
+        return self.cma_array(*args, **kwargs)
+
     def cma_array(self, shape, dtype=np.uint32, cacheable=0,
                   pointer=None, cache=None):
         """Get a contiguously allocated numpy array
@@ -346,12 +288,12 @@ class Xlnk:
             raw_pointer = self.cma_alloc(length, cacheable=cacheable)
             pointer = self.ffi.gc(raw_pointer, self.cma_free, size=length)
         buffer = self.cma_get_buffer(pointer, length)
-        array = np.frombuffer(buffer, dtype=dtype).reshape(shape)
-        view = array.view(ContiguousArray)
-        view.allocator = self
+        physical_address = self.cma_get_phy_addr(pointer)
+        view = PynqBuffer(shape=shape, dtype=dtype, buffer=buffer,
+                          device_address=physical_address,
+                          coherent=not cacheable,
+                          bo=physical_address, device=self)
         view.pointer = pointer
-        view.physical_address = self.cma_get_phy_addr(view.pointer)
-        view.cacheable = cacheable
         view.return_to = cache
         return view
 
@@ -467,6 +409,30 @@ class Xlnk:
         stats['CMA Memory Usage'] = memused
         stats['Buffer Count'] = len(self.bufmap)
         return stats
+
+    def cma_mem_size(self):
+        """Get the total size of CMA memory in the system
+
+        Returns
+        -------
+        int
+            The number of bytes of CMA memory
+
+        """
+        with open('/proc/meminfo', 'r') as f:
+            for l in f.readlines():
+                m = re.match('CmaTotal:[\\s]+([0-9]+) kB', l)
+                if m:
+                    return int(m[1]) * 1024
+        return 0
+
+    def flush(self, bo, offset, vaddr, nbytes):
+        self.libxlnk.cma_flush_cache(
+                Xlnk.ffi.cast("void*", vaddr), bo + offset, nbytes)
+
+    def invalidate(self, bo, offset, vaddr, nbytes):
+        self.libxlnk.cma_invalidate_cache(
+                Xlnk.ffi.cast("void*", vaddr), bo + offset, nbytes)
 
     def xlnk_reset(self):
         """Systemwide Xlnk Reset.

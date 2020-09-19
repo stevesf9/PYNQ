@@ -88,9 +88,11 @@ improve APSoC design:
    jupyter_notebooks
    python_environment
    pynq_overlays
+   pynq_alveo
    pynq_libraries
    overlay_design_methodology
    pynq_sd_card
+   pynq_cli
    pynq_package
    verification
    faqs

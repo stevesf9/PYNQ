@@ -34,12 +34,10 @@ __email__ = "pynq_support@xilinx.com"
 import asyncio
 import numpy as np
 from pynq.xlnk import ContiguousArray
-from pynq import DefaultIP, Xlnk
+from pynq import DefaultIP, allocate
 
 
 class _FrameCache:
-    _xlnk = None
-
     def __init__(self, mode, capacity=5, cacheable=0):
         self._cache = []
         self._mode = mode
@@ -54,13 +52,11 @@ class _FrameCache:
 
         """
         if self._cache:
-            frame = _FrameCache._xlnk.cma_array(
+            frame = allocate(
                 shape=self._mode.shape, dtype='u1', cacheable=self._cacheable,
                 pointer=self._cache.pop(), cache=self)
         else:
-            if _FrameCache._xlnk is None:
-                _FrameCache._xlnk = Xlnk()
-            frame = _FrameCache._xlnk.cma_array(
+            frame = allocate(
                 shape=self._mode.shape, dtype=np.uint8,
                 cacheable=self._cacheable, cache=self)
         return frame
