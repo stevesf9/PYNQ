@@ -29,6 +29,7 @@
 
 import os
 import subprocess as sproc
+import warnings
 
 __author__ = "Luca Cerina"
 __copyright__ = "Copyright 2016, NECST Laboratory, Politecnico di Milano"
@@ -95,6 +96,7 @@ class Wifi(object):
             String unique identifier of the wireless network
         password : str
             String WPA passphrase necessary to access the network
+            Leave empty for open network
         auto : bool
             Whether to set the interface as auto connected after boot.
 
@@ -104,16 +106,17 @@ class Wifi(object):
 
         """
 
-        # get bash string into string format for key search
-        wifikey_str = sproc.check_output('wpa_passphrase "{}" "{}"'.format(
-                                         ssid, password), shell=True)
-        wifikey_tokens = wifikey_str.decode().split('\n')
+        if password:
+            # get bash string into string format for key search
+            wifikey_str = sproc.check_output('wpa_passphrase "{}" "{}"'.format(
+                                             ssid, password), shell=True)
+            wifikey_tokens = wifikey_str.decode().split('\n')
 
-        # search clean list for tpsk key value
-        wifi_wpa_key = ''
-        for key_val in wifikey_tokens:
-            if '\tpsk=' in key_val:
-                wifi_wpa_key = key_val.split('=')[1]
+            # search clean list for tpsk key value
+            wifi_wpa_key = ''
+            for key_val in wifikey_tokens:
+                if '\tpsk=' in key_val:
+                    wifi_wpa_key = key_val.split('=')[1]
 
         # write the network interface file with new ssid/password entry
         os.system('ip link set {} up'.format(self.wifi_port))
@@ -124,15 +127,18 @@ class Wifi(object):
             net_iface_fh.write("allow-hotplug " + self.wifi_port + "\n")
         net_iface_fh.write("iface " + self.wifi_port + " inet dhcp\n")
         net_iface_fh.write(" wpa-ssid " + ssid + "\n")
-        net_iface_fh.write(" wpa-psk " + wifi_wpa_key + "\n\n")
+        if password:
+            net_iface_fh.write(" wpa-psk " + wifi_wpa_key + "\n\n")
+        else:
+            net_iface_fh.write(" wpa-key-mgmt NONE" + "\n\n")
+        net_iface_fh.write(" wpa-scan-ssid 1")
         net_iface_fh.close()
 
-    def connect(self, ssid, password, auto=False):
+    def connect(self, ssid, password, auto=False, force=False):
         """Make a new wireless connection.
 
-        This function kills the wireless connection and connect to a new one
-        using network ssid and WPA passphrase. Wrong ssid or passphrase will
-        reject the connection.
+        This function creates a wireless connection using network ssid and WPA
+        passphrase. Wrong ssid or passphrase will reject the connection.
 
         Parameters
         ----------
@@ -140,17 +146,30 @@ class Wifi(object):
             Unique identifier of the wireless network
         password : str
             String WPA passphrase necessary to access the network
+            Leave empty for open network
         auto : bool
             Whether to set the interface as auto connected after boot.
+        force : bool
+            By default the function will only show a warning if a connection
+            already exists. Set this parameter to `True` to forcefully kill
+            the existing connection and create a new one
 
         Returns
         -------
         None
 
         """
-        os.system('ifdown {}'.format(self.wifi_port))
-        self.gen_network_file(ssid, password, auto)
-        os.system('ifup {}'.format(self.wifi_port))
+        if not os.path.exists("/etc/network/interfaces.d/" + self.wifi_port) \
+                or not sproc.getoutput("ifconfig {} | grep "
+                                   "inet".format(self.wifi_port)) \
+                or force:
+            os.system('ip link set {} down'.format(self.wifi_port))
+            self.gen_network_file(ssid, password, auto)
+            sproc.getoutput('ifup --force {}'.format(self.wifi_port))
+        else:
+            warnings.warn("A connection is already established. You can force "
+                          "a new connection by setting the 'force' option to "
+                          "'True'.", UserWarning)
 
     def reset(self):
         """Shutdown the network connection.
@@ -164,5 +183,12 @@ class Wifi(object):
 
         """
         os.system('killall -9 wpa_supplicant')
-        os.system('ifdown {}'.format(self.wifi_port))
+        os.system('ip link set {} down'.format(self.wifi_port))
         os.system('rm -fr /etc/network/interfaces.d/wl*')
+
+# Prompt to setup a connection if run directly
+if __name__ == "__main__":
+    port = Wifi()
+    ssid = input("Type in the SSID:")
+    pwd = input("Type in the password:")
+    port.connect(ssid, pwd)

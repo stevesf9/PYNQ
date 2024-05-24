@@ -1,35 +1,6 @@
 #   Copyright (c) 2018, Xilinx, Inc.
-#   All rights reserved.
-#
-#   Redistribution and use in source and binary forms, with or without
-#   modification, are permitted provided that the following conditions are met:
-#
-#   1.  Redistributions of source code must retain the above copyright notice,
-#       this list of conditions and the following disclaimer.
-#
-#   2.  Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in the
-#       documentation and/or other materials provided with the distribution.
-#
-#   3.  Neither the name of the copyright holder nor the names of its
-#       contributors may be used to endorse or promote products derived from
-#       this software without specific prior written permission.
-#
-#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-#   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-#   THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-#   PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
-#   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-#   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-#   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-#   OR BUSINESS INTERRUPTION). HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-#   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-#   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-#   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#   SPDX-License-Identifier: BSD-3-Clause
 
-__author__ = "Peter Ogden"
-__copyright__ = "Copyright 2018, Xilinx"
-__email__ = "pynq_support@xilinx.com"
 
 import asyncio
 import cffi
@@ -39,6 +10,7 @@ import numpy as np
 from pynq.buffer import PynqBuffer
 from pynq.ps import CPU_ARCH, ZU_ARCH
 from .constants import LIB_SEARCH_PATH
+from .common import VideoMode
 
 
 def _fourcc_int(fourcc):
@@ -86,6 +58,9 @@ class DrmDriver:
         self._video_file = os.fdopen(self._video_fd, "r+b", buffering=0)
 
         self._device = self._videolib.pynqvideo_device_init(self._video_fd)
+        if self._device == 0:
+            raise RuntimeError("Unable to create DRM device")
+
         if event_loop:
             self._loop = event_loop
         else:
@@ -93,11 +68,21 @@ class DrmDriver:
         self._loop.add_reader(self._video_file,
                               functools.partial(DisplayPort._callback, self))
         self._pageflip_event = asyncio.Event()
-        self._mode = None
+        self.mode = None
+        mode_count = self._videolib.pynqvideo_num_modes(self._device)
+        raw_modes = self._ffi.new('struct video_mode[{}]'.format(mode_count))
+        self._videolib.pynqvideo_get_modes(self._device, raw_modes, mode_count)
+        self.modes = [VideoMode(m.width, m.height, 24, m.refresh)
+                      for m in raw_modes]
 
     def _openlib(self):
         self._ffi = cffi.FFI()
         self._ffi.cdef("""
+        struct video_mode {
+            int width;
+            int height;
+            int refresh;
+        };
         void* pynqvideo_device_init(int fd);
         int pynqvideo_device_set_mode(void* device, int width, int height,
                         int refreh, int colorspace);
@@ -111,6 +96,8 @@ class DrmDriver:
         uint64_t pynqvideo_frame_size(void* frame);
         uint32_t pynqvideo_frame_stride(void* frame);
         void pynqvideo_frame_free(void* device, void* frame);
+        int pynqvideo_num_modes(void* device);
+        int pynqvideo_get_modes(void* device, struct video_mode* modes, int length);
         """
                        )
         self._videolib = self._ffi.dlopen(os.path.join(LIB_SEARCH_PATH,
@@ -136,14 +123,16 @@ class DrmDriver:
             The pixel format to use - must contain a fourcc
 
         """
+        if mode not in self.modes:
+            raise ValueError("mode: {} is not supported".format(mode))
         if not pixelformat.fourcc:
             raise ValueError("pixelformat does not define a FourCC")
         ret = self._videolib.pynqvideo_device_set_mode(
             self._device, mode.width, mode.height, mode.fps,
             _fourcc_int(pixelformat.fourcc))
         if ret:
-            raise OSError(ret)
-        self._mode = mode
+            raise RuntimeError("Monitor is not detected")
+        self.mode = mode
 
     def start(self):
         """Dummy function to match the HDMI interface
@@ -161,9 +150,11 @@ class DrmDriver:
         """Close the display device
 
         """
-        self._loop.remove_reader(self._video_file)
-        self._videolib.pynqvideo_device_close(self._device)
-        self._video_file.close()
+        if self._device:
+            self._loop.remove_reader(self._video_file)
+            self._videolib.pynqvideo_device_close(self._device)
+            self._device = None
+            self._video_file.close()
 
     def newframe(self):
         """Return a new frame which can later be written
@@ -181,17 +172,17 @@ class DrmDriver:
         data_size = self._videolib.pynqvideo_frame_size(frame_pointer)
         data_physaddr = self._videolib.pynqvideo_frame_physaddr(frame_pointer)
         data_stride = self._videolib.pynqvideo_frame_stride(frame_pointer)
-        if len(self._mode.shape) == 2:
-            expected_stride = self._mode.shape[1]
+        if len(self.mode.shape) == 2:
+            expected_stride = self.mode.shape[1]
         else:
-            expected_stride = self._mode.shape[1] * self._mode.shape[2]
+            expected_stride = self.mode.shape[1] * self.mode.shape[2]
         buffer = self._ffi.buffer(data_pointer, data_size)
         if expected_stride == data_stride:
-            array = np.frombuffer(buffer, dtype='u1').reshape(self._mode.shape)
+            array = np.frombuffer(buffer, dtype='u1').reshape(self.mode.shape)
         else:
             raw_array = np.frombuffer(buffer, dtype='u1').reshape(
-                    [self._mode.shape[0], data_stride])
-            array = raw_array[:,0:expected_stride].reshape(self._mode.shape)
+                    [self.mode.shape[0], data_stride])
+            array = raw_array[:,0:expected_stride].reshape(self.mode.shape)
         view = array.view(PynqBuffer)
         view.pointer = frame_pointer
         view.device_address = data_physaddr
@@ -217,10 +208,10 @@ class DrmDriver:
         ret = self._videolib.pynqvideo_frame_write(
             self._device, frame.pointer)
         if ret == -1:
-            loop.run_until_complete(
-                asyncio.ensure_future(display.writeframe_async(frame)))
+            self._loop.run_until_complete(
+                asyncio.ensure_future(self.writeframe_async(frame)))
         elif ret > 0:
-            raise OSError(ret)
+            raise OSError(ret, "Can't write frame")
         else:
             self._videolib.pynqvideo_device_handle_events(self._device)
             # Frame should no longer be disposed
@@ -246,7 +237,7 @@ class DrmDriver:
                 await asyncio.sleep(0)
                 frame.disposed = True
             elif ret > 0:
-                raise OSError(ret)
+                raise OSError(ret, "Can't write frame")
             else:
                 self._pageflip_event.clear()
                 await self._pageflip_event.wait()
@@ -270,3 +261,5 @@ if CPU_ARCH == ZU_ARCH:
 
             """
             super().__init__('/dev/dri/card0', event_loop)
+
+

@@ -22,25 +22,19 @@ case ${ARCH} in
 
 esac
 
-SYSROOT_IMAGE=$PWD/sysroot.${ARCH}.img
-export HOST_SYSROOT=$PWD/sysroot.${ARCH}
-mkdir -p ${HOST_SYSROOT}
-cp --sparse=always $ROOT_IMAGE $SYSROOT_IMAGE
-${ROOTDIR}/scripts/mount_image.sh $SYSROOT_IMAGE $HOST_SYSROOT
-
-function unmount_delete() {
-${ROOTDIR}/scripts/unmount_image.sh $HOST_SYSROOT $SYSROOT_IMAGE
-rm $SYSROOT_IMAGE
-}
-
-trap unmount_delete EXIT
-
-# Fixup symlinks in the sysroot
-(cd $HOST_SYSROOT && for link in `find -lname '/*'`; do target=$(readlink "$link"); sudo rm "$link"; sudo ln -s "$PWD$target" "$link"; done)
+for f in `find $CT_COMPILE_ROOT/native -name bin -maxdepth 2`:
+do
+  export PATH=$f:$PATH
+done
 
 export -n LD_LIBRARY_PATH
 # Use cross tools to build the provided configuration
 ct-ng $sample
+
+sed -e 's|CT_ISL_MIRRORS=.*$|CT_ISL_MIRRORS="https://distfiles.macports.org/isl/"|' \
+    -e 's|CT_EXPAT_MIRRORS=.*$|CT_EXPAT_MIRRORS="https://github.com/libexpat/libexpat/releases/download/R_2_2_6"|' \
+    -i .config
+
 ct-ng build
 
 cd ${ARCH}/microblazeel-xilinx-elf

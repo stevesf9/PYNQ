@@ -19,11 +19,15 @@
 #include <boost/scope_exit.hpp>
 
 extern "C" {
-
+struct video_mode {
+	int width;
+	int height;
+	int refresh;
+};
 
 void* pynqvideo_device_init(int fd);
 int pynqvideo_device_set_mode(void* device, int width, int height,
-		int refreh, int colorspace);
+		int refresh, int colorspace);
 void pynqvideo_device_close(void* device);
 void pynqvideo_device_handle_events(void* device);
 
@@ -34,6 +38,8 @@ void* pynqvideo_frame_data(void* frame);
 uint64_t pynqvideo_frame_size(void* frame);
 uint32_t pynqvideo_frame_stride(void* frame);
 void pynqvideo_frame_free(void* device, void* frame);
+int pynqvideo_num_modes(void* device);
+int pynqvideo_get_modes(void* device, struct video_mode* modes, int length);
 
 }
 
@@ -166,15 +172,13 @@ public:
 			throw os_error("Cannot map dumb buffer", ret);
 		}
 		data = mmap(0, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mreq.offset);
-		std::cerr << "Offset: " << mreq.offset << std::endl;
 		if (data == MAP_FAILED) {
-			throw std::runtime_error("Cannot mmap dumb buffer");
+			throw os_error("Cannot mmap dumb buffer", EIO);
 		}
 		memset(data, 0, size);
 
 		physical_address = mreq.offset;
 
-		std::cout << "Created Frame Buffer: " << physical_address << std::endl;
 		
 		commit = true;
 	}
@@ -204,8 +208,9 @@ public:
 		m_ev.page_flip_handler = page_flip_handler;
 		uint64_t has_dumb;
 		if (drmGetCap(m_fd, DRM_CAP_DUMB_BUFFER, &has_dumb) < 0 || !has_dumb) {
-			throw std::runtime_error("Device does not support DUMB buffers");
+			throw os_error("Device does not support DUMB buffers", EINVAL);
 		}
+		enumerate_modes();
 	}
 
 	~device() {
@@ -229,7 +234,7 @@ public:
 		m_saved_crtc = drmModeGetCrtc(m_fd, m_crtc);
 		int ret = drmModeSetCrtc(m_fd, m_crtc, frame->fb_handle, 0, 0, &m_conn, 1, &m_info);
 		if (ret) {
-			throw std::runtime_error("Could not set CRTC");
+			throw os_error("Could not set CRTC", ret);
 		}
 		m_active_frame = frame;
 		return 0;
@@ -278,10 +283,55 @@ public:
 	void handle_events() {
 		drmHandleEvent(m_fd, &m_ev);
 	}	
+
+	const std::vector<video_mode>& modes() {
+		return m_modes;
+	}
+
 private:	
 	static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec, void* data) {
 		device* dev = static_cast<device*>(data);
 		dev->m_pending = false;
+	}
+
+	void enumerate_modes() {
+		drmModeRes* res;
+		drmModeConnector *conn;
+
+		res = drmModeGetResources(m_fd);
+		if (!res) {
+			throw std::runtime_error("Cannot retrieve DRM resources");
+		}
+		BOOST_SCOPE_EXIT(&res) {
+			drmModeFreeResources(res);
+		} BOOST_SCOPE_EXIT_END
+
+		m_info.hdisplay = 0;
+
+		for (int i = 0; i < res->count_connectors; ++i) {
+			conn = drmModeGetConnector(m_fd, res->connectors[i]);
+			if (!conn) {
+				std::cerr << "Cannot retrieve DRM connector :" << errno << std::endl;
+			}
+			BOOST_SCOPE_EXIT(&conn) {
+				drmModeFreeConnector(conn);
+			} BOOST_SCOPE_EXIT_END
+
+			if (conn->connection != DRM_MODE_CONNECTED) {
+				std::cerr << "Ignoring unconnected port" << std::endl;
+				continue;
+			}
+
+			if (conn->count_modes == 0) {
+				std::cerr << "Ingnoring connector with no modes" << std::endl;
+				continue;
+			}
+
+			for (int j = 0; j < conn->count_modes; ++j) {
+				const auto& mode = conn->modes[j];
+				m_modes.push_back(video_mode{mode.hdisplay, mode.vdisplay, (int)mode.vrefresh});
+			}
+		}
 	}
 
 	void find_conn(int width, int height, int refresh) {
@@ -329,7 +379,7 @@ private:
 		}
 
 		if (!m_info.hdisplay) {
-			throw std::runtime_error("Could not find compatible mode");
+			throw os_error("Could not find compatible mode", EINVAL);
 		}
 
 	}
@@ -364,7 +414,7 @@ private:
 			}
 		}
 		if (!m_crtc) {
-			throw std::runtime_error("Could not find CRTC");
+			throw os_error("Could not find CRTC", ENODEV);
 		}
 	}
 
@@ -379,13 +429,19 @@ private:
 	std::map<void*, std::shared_ptr<frame> > m_frame_map;
 	std::vector<frame*> m_free_frames;
 	frame* m_active_frame;
+	std::vector<video_mode> m_modes;
 };
 
 }
 
 void* pynqvideo_device_init(int fd) {
-	auto dev = new pynqvideo::device(fd);
-	return static_cast<void*>(dev);
+	try {
+		auto dev = new pynqvideo::device(fd);
+		return static_cast<void*>(dev);
+	}
+	catch (pynqvideo::os_error& e) {
+		return 0;
+	}
 }
 
 int pynqvideo_device_set_mode(void* device, int width, int height,
@@ -411,9 +467,14 @@ void pynqvideo_device_handle_events(void* device) {
 }
 
 void* pynqvideo_frame_new(void* device) {
-	auto dev = static_cast<pynqvideo::device*>(device);
-	auto frame = dev->new_frame();
-	return static_cast<void*>(frame);
+	try {
+		auto dev = static_cast<pynqvideo::device*>(device);
+		auto frame = dev->new_frame();
+		return static_cast<void*>(frame);
+	}
+	catch (pynqvideo::os_error& e) {
+		return 0;
+	}
 }
 
 int pynqvideo_frame_write(void* device, void* frame) {
@@ -453,4 +514,15 @@ void pynqvideo_frame_free(void* device, void* frame) {
 	auto dev = static_cast<pynqvideo::device*>(device);
 	auto f = static_cast<pynqvideo::frame*>(frame);
 	dev->free_frame(f);
+}
+
+int pynqvideo_num_modes(void* device) {
+	return static_cast<pynqvideo::device*>(device)->modes().size();
+}
+
+int pynqvideo_get_modes(void* device, video_mode* modes, int length) {
+	const std::vector<video_mode>& source_modes = static_cast<pynqvideo::device*>(device)->modes();
+	int to_copy = std::min(length, (int)source_modes.size());
+	std::copy(source_modes.begin(), source_modes.begin() + to_copy, modes);
+	return source_modes.size();
 }

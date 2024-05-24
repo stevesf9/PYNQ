@@ -1,38 +1,8 @@
 #   Copyright (c) 2016, Xilinx, Inc.
-#   All rights reserved.
-#
-#   Redistribution and use in source and binary forms, with or without
-#   modification, are permitted provided that the following conditions are met:
-#
-#   1.  Redistributions of source code must retain the above copyright notice,
-#       this list of conditions and the following disclaimer.
-#
-#   2.  Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in the
-#       documentation and/or other materials provided with the distribution.
-#
-#   3.  Neither the name of the copyright holder nor the names of its
-#       contributors may be used to endorse or promote products derived from
-#       this software without specific prior written permission.
-#
-#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-#   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-#   THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-#   PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
-#   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-#   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-#   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-#   OR BUSINESS INTERRUPTION). HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-#   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-#   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-#   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#   SPDX-License-Identifier: BSD-3-Clause
 
 import os
-import subprocess
 
-__author__ = "Yun Rock Qu"
-__copyright__ = "Copyright 2019, Xilinx"
-__email__ = "pynq_support@xilinx.com"
 
 
 SYSTEM_DEVICE_TREE_PATH = '/sys/kernel/config/device-tree/overlays'
@@ -55,7 +25,7 @@ def get_dtbo_path(bitfile_name):
         The absolute path of the dtbo file.
 
     """
-    return ''.join(bitfile_name.split('.', -1)[:-1]) + '.dtbo'
+    return os.path.splitext(bitfile_name)[0] + '.dtbo'
 
 
 def get_dtbo_base_name(dtbo_path):
@@ -102,6 +72,7 @@ class DeviceTreeSegment:
             raise IOError('The dtbo file {} does not exist.'.format(dtbo_path))
         self.dtbo_path = dtbo_path
         self.dtbo_name = get_dtbo_base_name(dtbo_path)
+        self.sysfs_dir = os.path.join(SYSTEM_DEVICE_TREE_PATH, self.dtbo_name)
 
     def is_dtbo_applied(self):
         """Show if the device tree segment has been applied.
@@ -112,10 +83,10 @@ class DeviceTreeSegment:
             True if the device tree status shows `applied`.
 
         """
-        command = 'cat ' + os.path.join(
-            SYSTEM_DEVICE_TREE_PATH, self.dtbo_name, 'status')
-        status = subprocess.check_output(command.split())
-        return status.decode('utf-8') == 'applied\n'
+        if not os.path.exists(self.sysfs_dir):
+            return False
+        with open(os.path.join(self.sysfs_dir, 'status'), 'r') as f:
+            return f.read() == 'applied\n'
 
     def insert(self):
         """Insert the dtbo file into the device tree.
@@ -123,13 +94,26 @@ class DeviceTreeSegment:
         The method will raise an exception if the insertion has failed.
 
         """
-        command = 'mkdir -p ' + os.path.join(
-            SYSTEM_DEVICE_TREE_PATH, self.dtbo_name)
-        _ = subprocess.check_output(command.split())
+        os.makedirs(self.sysfs_dir, exist_ok=True)
+        with open(self.dtbo_path, 'rb') as f:
+            dtbo_data = f.read()
 
-        command = 'cat ' + self.dtbo_path + ' > ' + os.path.join(
-            SYSTEM_DEVICE_TREE_PATH, self.dtbo_name, 'dtbo')
-        _ = os.system(command)
+        with open(os.path.join(self.sysfs_dir, 'dtbo'),
+                  'wb', buffering=0) as f:
+            f.write(dtbo_data)
+
+        # The only way to detect a DTBO insert failure is to try and
+        # read back the contents of the dtbo attribute and see if
+        # it is non-empty
+
+        with open(os.path.join(self.sysfs_dir, 'dtbo'),
+                'rb', buffering=0) as f:
+            # The entire DTBO file has to be read in a single syscall
+            # otherwise and IO error will occur
+            read_back = f.read(1024*1024)
+            if read_back != dtbo_data:
+                raise RuntimeError('Device tree {} cannot be applied'.format(
+                    self.dtbo_name))
 
         if not self.is_dtbo_applied():
             raise RuntimeError('Device tree {} cannot be applied.'.format(
@@ -139,7 +123,7 @@ class DeviceTreeSegment:
         """Remove the dtbo file from the device tree.
 
         """
-        dtbo_folder = os.path.join(SYSTEM_DEVICE_TREE_PATH, self.dtbo_name)
-        if os.path.exists(dtbo_folder):
-            command = 'rmdir ' + dtbo_folder
-            _ = subprocess.check_output(command.split())
+        if os.path.exists(self.sysfs_dir):
+            os.rmdir(self.sysfs_dir)
+
+

@@ -8,18 +8,18 @@ sources of the other constituent parts.
 It's highly recommended to run these scripts inside of a virtual machine. The
 image building requires doing a lot of things as root and while every effort
 has been made to ensure it doesn't break the world this is far from guaranteed.
-This flow must be run in a Debian or Ubuntu based Linux distribution and has
-been tested on Ubuntu 16.04. Other versions should work but may required
-different or additional packages. The build process is optimised for 4-cores
-and will take up to 20 GB of space. A default Amazon EC2 instance is the main
-development environment.
+This flow must be run in a Ubuntu based Linux distribution and has been tested
+on Ubuntu 16.04 and Ubuntu 18.04. Other Linux versions might work but may
+require different or additional packages. The build process is optimised for
+4-cores and can take up to 50 GB of space.
 
 ## Quick start
  * Ensure that sudo is configured for passwordless use and that proxy settings
    and other environment variables are forwarded correctly.
  * Run `scripts/setup_host.sh`
- * Install Petalinux (e.g. 2017.4)
+ * Install Petalinux (e.g. 2022.1)
  * Ensure that Petalinux is on the PATH
+ * Ensure that the prebuilt pynq sdist and rootfs tarballs are in the sdbuild/prebuilt folder
  * Run `make BOARDDIR=<boards_directory>` to recreate all board images
  * Wait for a couple of hours
 
@@ -30,7 +30,9 @@ or the other build tools. It installs crosstool-ng which is not included in the
 ubuntu repository and an up-to-date and slightly patched version of QEMU which
 fixes some race conditions in the ubuntu-shipped version. See the source of the
 script for more details in what exactly needs to be done to configure your own
-environment if the script proves insufficient.
+environment if the script proves insufficient. Also, make sure you have the 
+appropriate Vivado licenses to build for your target board, in particular 
+[HDMI IP](https://www.xilinx.com/products/intellectual-property/hdmi.html).
 
 ## Stages of an image build
 
@@ -42,7 +44,7 @@ PYNQ packages such as Jupyter and the Microblaze compiler.
 
 ## Initial bootstrap
 
-The `unbuntu` folder contains all of the files for the initial bootstrap of the
+The `ubuntu` folder contains all of the files for the initial bootstrap of the
 Ubuntu root filesystem. For this release we are targeting the 18.04 _Bionic
 Beaver_ release but other versions can be added here if desired. The `bionic`
 folder contains subfolders for the `arm` and `aarch64` architectures each
@@ -98,7 +100,7 @@ the final image.
 ## Porting to a new board
 
 There are two flows for porting to a new board. The simplest approach is to
-take a pre-existing PetaLinux BSP and our pre-built board-agnostic imagea
+take a pre-existing PetaLinux BSP and our pre-built board-agnostic image
 appropriate to the architecture - arm for Zynq-7000 and aarch64 for Zynq
 UltraScale+. The `scripts/image_from_prebuilt.sh` script will take these two
 components and create an image without needing to run the whole image creation
@@ -123,7 +125,7 @@ STAGE4_PACKAGES_Myboard := my_package
 ```
 
 ### Step 2: Prepare the BSP
-The main prerequisite for porting to a new board is the existance of a valid
+The main prerequisite for porting to a new board is the existence of a valid
 Petalinux BSP (`Myboard.bsp`) for the board targeting the correct 
 version of the Xilinx tools. This can be done in multiple ways shown below.
 
@@ -152,30 +154,50 @@ boot files please refer to the Petalinux documentation.
 
 ### Step 2: Add extra packages 
 Custom packages can be placed in a `packages` subfolder of the and will be
-picked up automatically if referenced. This is a convient way of installing
+picked up automatically if referenced. This is a convenient way of installing
 custom notebooks or Python packages if desired for your board.
 
-### Step 3: Run `make`
+### Step 3: Build the image
 
-With all the files prepared, the SD card image can be built:
+#### (1) Collect a prebuilt board-agnostic root filesystem tarball and a prebuilt PYNQ source distribution.
 
-```Makefile
-make BOARDDIR=<absolute_path>/myboards
+Starting in PYNQ v3.0, by default the SD card build flow expects a prebuilt root filesystem and a PYNQ source distribution to speedup and simplify user rebuilds of SD card images. These binaries can be found at [the PYNQ boards page](https://www.pynq.io/boards.html) and copied into the sdbuild prebuilt folder
+
+```bash
+# For rebuilding all SD cards, both arm and aarch64 root filesystems
+# may be required depending on boards being targetted.
+cp pynq_rootfs.<arm|aarch64>.tar.gz <PYNQ repository>/sdbuild/prebuilt/pynq_rootfs.<arm|aarch64>.tar.gz
+cp pynq-<version>.tar.gz            <PYNQ repository>/sdbuild/prebuilt/pynq_sdist.tar.gz
+```
+
+#### (2) Run `make`
+
+With all the files prepared, the SD card image can be built by navigating to the following directory and running make:
+
+```bash
+cd <PYNQ repository>/sdbuild/
+make
 ```
 
 ### Step 4 (Optional): Useful byproducts
+
+You can force a PYNQ source distribution rebuild by setting the REBUILD_PYNQ_SDIST variable when invoking make
+
+```bash
+make REBUILD_PYNQ_SDIST=True
+```
+
+You can force a root filesystem build by setting the REBUILD_PYNQ_ROOTFS variable when invoking make:
+
+```bash
+make REBUILD_PYNQ_ROOTFS=True
+```
 
 All boot files are created using Petalinux based on a provided BSP. To generate
 the boot files only:
 
 ```Makefile
 make boot_files BOARDDIR=<absolute_path>/myboards
-```
-
-To generate the software components for SDx platform:
-
-```Makefile
-make sdx_sw BOARDDIR=<absolute_path>/myboards
 ```
 
 To generate sysroot:
@@ -190,27 +212,10 @@ To generate the Petalinux BSP for future use:
 make bsp BOARDDIR=<absolute_path>/myboards
 ```
 
-To build the board-agnostic images and sysroot you can pass the `ARCH_ONLY`
-variable to make. This will cause the `images` target to build the architecture
-image.
+To use a previously built PYNQ source distribution tarball and/or rootfs, instead of moving the files into the prebuilt folder, you can specify the `PYNQ_SDIST` and `PYNQ_ROOTFS` environment variables
 
 ```Makefile
-make images ARCH_ONLY=arm
-```
-
-To use a board-agnostic image to build a board-specific image you can pass the
-`PREBUILT` variable:
-
-```Makefile
-make PREBUILT=<image path> BOARDS=<board>
-```
-
-To use a previously built PYNQ source distribution tarball you can pass the 
-`PYNQ_SDIST` variable. This will also avoid having to rebuild bitstreams 
-(except for external boards) and MicroBlazes' bsps and binaries.
-
-```Makefile
-make PYNQ_SDIST=<sdist tarball path>
+make PYNQ_SDIST=<sdist tarball path> PYNQ_ROOTFS=<rootfs tarball path>
 ```
 
 ## Custom Ubuntu Repository

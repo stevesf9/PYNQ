@@ -1,4 +1,6 @@
-![alt tag](./logo.png)
+![pynq_logo](https://github.com/Xilinx/PYNQ/raw/master/logo.png)
+
+![python](https://github.com/Xilinx/PYNQ/workflows/Python/badge.svg)
 
 PYNQ is an open-source project from Xilinx that makes it easy to design embedded systems with Zynq All Programmable Systems on Chips (APSoCs). Using the Python language and libraries, designers can exploit the benefits of programmable logic and microprocessors in Zynq to build more capable and exciting embedded systems.
 PYNQ users can now create high performance embedded applications with
@@ -13,7 +15,7 @@ See the <a href="http://www.pynq.io/" target="_blank">PYNQ webpage</a> for an ov
 
 ## Precompiled Image
 
-The project currently supports <a href="http://www.pynq.io/board.html" target="_blank">multiple boards</a>. 
+The project currently supports <a href="https://www.pynq.io/boards.html" target="_blank">multiple boards</a>. 
 
 You can download a precompiled image, write the image to a micro SD card, and boot the board from the micro SD card. 
 
@@ -74,6 +76,6 @@ Please ask questions on the <a href="https://discuss.pynq.io" target="_blank">PY
 
 ## SDBuild Open Source Components
 
-**License and Copyrights Info** [TAR/GZIP](http://bit.ly/2Os4h03)
+**License and Copyrights Info** [TAR/GZIP](https://www.xilinx.com/bin/public/openDownload?filename=pynq-v3.0-license.tar.gz)
 
-**Open Components Source Code** [TAR/GZIP](http://bit.ly/2AUmcUY)
+**Open Components Source Code** [TAR/GZIP](https://www.xilinx.com/bin/public/openDownload?filename=pynq-v3.0-open_components.tar.gz)

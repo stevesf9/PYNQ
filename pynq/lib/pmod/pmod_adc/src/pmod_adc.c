@@ -1,32 +1,6 @@
 /******************************************************************************
- *  Copyright (c) 2016, Xilinx, Inc.
- *  All rights reserved.
- * 
- *  Redistribution and use in source and binary forms, with or without 
- *  modification, are permitted provided that the following conditions are met:
- *
- *  1.  Redistributions of source code must retain the above copyright notice, 
- *     this list of conditions and the following disclaimer.
- *
- *  2.  Redistributions in binary form must reproduce the above copyright 
- *      notice, this list of conditions and the following disclaimer in the 
- *      documentation and/or other materials provided with the distribution.
- *
- *  3.  Neither the name of the copyright holder nor the names of its 
- *      contributors may be used to endorse or promote products derived from 
- *      this software without specific prior written permission.
- *
- *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, 
- *  THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR 
- *  PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR 
- *  CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, 
- *  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, 
- *  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- *  OR BUSINESS INTERRUPTION). HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, 
- *  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR 
- *  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF 
- *  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *  Copyright (c) 2016-2020, Xilinx, Inc.
+ *  SPDX-License-Identifier: BSD-3-Clause
  *
  *****************************************************************************/
 /******************************************************************************
@@ -47,7 +21,8 @@
  * ----- --- ------- -----------------------------------------------
  * 1.00a pp  04/13/16 release
  * 1.00b pp  05/27/16 fix pmod_init()
- *
+ * 1.10  mrn 10/12/20 Comppute log_capacity computation depending on the number
+ *                    of channels. update initialize function
  * </pre>
  *
  *****************************************************************************/
@@ -75,7 +50,7 @@
 // Log constants
 #define LOG_BASE_ADDRESS (MAILBOX_DATA_PTR(4))
 #define LOG_ITEM_SIZE sizeof(float)
-#define LOG_CAPACITY  (4000/LOG_ITEM_SIZE)
+#define MAX_SAMPLES (4032 / LOG_ITEM_SIZE)
 
 u8 WriteBuffer[10];
 u8 ReadBuffer[10];
@@ -88,6 +63,7 @@ int main()
     u32 delay;
     u32 cmd;
     u32 adc_raw_value;
+    u32 log_capacity, num_channels;
     float adc_voltage;
 
     device = i2c_open(3, 2);
@@ -112,6 +88,8 @@ int main()
         useChan0 = ((MAILBOX_CMD_ADDR) >> 4) & 0x01;
         useChan1 = ((MAILBOX_CMD_ADDR) >> 5) & 0x01;
         useChan2 = ((MAILBOX_CMD_ADDR) >> 6) & 0x01;
+        num_channels = useChan0 + useChan1 + useChan2;
+        log_capacity = ((u32)(MAX_SAMPLES/num_channels)) * num_channels;
         adc_config(useChan3,useChan2,useChan1,useChan0,
                     useVref,useFILT,useBIT,useSample);
         
@@ -150,7 +128,7 @@ int main()
                 // set the delay in us between samples
                 delay = MAILBOX_DATA(0);
                 cb_init(&circular_log, LOG_BASE_ADDRESS, 
-                            LOG_CAPACITY, LOG_ITEM_SIZE);
+                            log_capacity, LOG_ITEM_SIZE, num_channels);
                 while((MAILBOX_CMD_ADDR & 0xf) != RESET_ADC){
                    if(useChan0)
                    {
@@ -176,7 +154,7 @@ int main()
                 // set the delay in us between samples
                 delay = MAILBOX_DATA(0);
                 cb_init(&circular_log, LOG_BASE_ADDRESS, 
-                            LOG_CAPACITY, LOG_ITEM_SIZE);
+                            log_capacity, LOG_ITEM_SIZE, num_channels);
                 while((MAILBOX_CMD_ADDR & 0x0f) != RESET_ADC){
                     if(useChan0)
                     {
@@ -205,4 +183,5 @@ int main()
     }
    return 0;
 }
+
 

@@ -1,12 +1,20 @@
+# Copyright (C) 2022 Xilinx, Inc
+# SPDX-License-Identifier: BSD-3-Clause
+
 DEFAULT_BOARDDIR := $(CURDIR)/../boards
 BOARDDIR ?= $(DEFAULT_BOARDDIR)
-BOARDS ?= $(basename $(notdir $(wildcard $(BOARDDIR)/*/*.spec))) 
-UBUNTU_RELEASE := bionic
-VERSION := 2.5
 
-KERNEL_VERSION := 2019.1
-LINUX_VERSION := 4.19.0-xilinx-v2019.1
-QEMU_VERSION := 4.0.0
+# Look for boards and set boarddir to parent directory of single or
+# multiple board builds
+ALLBOARDS ?= $(basename $(notdir $(wildcard $(BOARDDIR)/*/*.spec))) 
+BOARDS ?= $(ALLBOARDS)
+
+UBUNTU_RELEASE := jammy
+VERSION := 3.0.1
+
+KERNEL_VERSION := 2022.1
+LINUX_VERSION := 5.15.19-xilinx-v2022.1
+QEMU_VERSION := 5.2.0
 SCRIPT_DIR := $(CURDIR)/scripts
 SHELL := /bin/bash
 
@@ -30,7 +38,7 @@ BOOT_aarch64 := u-boot.elf zynqmp_fsbl.elf pmufw.elf bl31.elf
 export CCACHEDIR
 export ROOTDIR
 export BUILD_ROOT
-export BB_ENV_EXTRAWHITE := PYNQ_BOARDNAME
+export BB_ENV_EXTRAWHITE := PYNQ_BOARDNAME FPGA_MANAGER
 export SHELL
 
 $(IMAGE_ROOT):
@@ -77,16 +85,30 @@ include $(PACKAGE_MAKES)
 include $(wildcard $(CURDIR)/ubuntu/$(UBUNTU_RELEASE)/*/config)
 include $(wildcard $(BOARDDIR)/*/*.spec)
 
+############# BEGIN BOARD_SPECIFIC_RULES ######### 
+
 define BOARD_SPECIFIC_RULES
 # $1 is the board name
+ifeq ($$(FPGA_MANAGER_$1),)
+	FPGA_MANAGER_$1 := 1
+endif
+
+# New API - SDIST and RootFS by default should be provided to the Makefile
+# >v2.7     can be overriden to old behavior by setting REBUILD_PYNQ_ROOTFS
+#           and REBUILD_PYNQ_SDIST
+PYNQ_SDIST ?= $(CURDIR)/prebuilt/pynq_sdist.tar.gz
+PYNQ_ROOTFS ?= $(CURDIR)/prebuilt/pynq_rootfs.$$(ARCH_$1).tar.gz
+
 BOARDDIR_$1 := $$(BOARDDIR)/$1
 BITSTREAM_ABS_$1 := $$(patsubst %, $$(BOARDDIR_$1)/%, $$(BITSTREAM_$1))
 BUILD_ROOT_$1 := $$(BUILD_ROOT)/$1
 BOOT_ROOT_$1 := $$(BOOT_ROOT)/$1
 QEMU_$1 := $$(shell which qemu-$$(ARCH_$1)-static)
-PACKAGE_ENV_$1 := QEMU_EXE=$$(QEMU_$1) PYNQ_BOARDDIR=$$(BOARDDIR_$1) PYNQ_BOARD=$1 ARCH=$$(ARCH_$1) PACKAGE_PATH=$$(BOARDDIR_$1)/packages
+PACKAGE_ENV_$1 := QEMU_EXE=$$(QEMU_$1) PYNQ_BOARDDIR=$$(BOARDDIR_$1) PYNQ_BOARD=$1 FPGA_MANAGER=$$(FPGA_MANAGER_$1) ARCH=$$(ARCH_$1) PACKAGE_PATH=$$(BOARDDIR_$1)/packages PYNQ_SDIST=$$(PYNQ_SDIST) PYNQ_ROOTFS=$$(PYNQ_ROOTFS)
 IMAGE_$1 := $$(IMAGE_ROOT)/$1-$$(VERSION).img
+ROOT_$1 := $$(BUILD_ROOT)/$1.tar.gz
 SYSROOT_$1 := $$(SYSROOT_ROOT)/$1
+EXTRA_BOOT_$1 := $$(BUILD_ROOT)/$1.extra_boot
 
 ifeq ($$(ARCH_$1),arm)
 	TEMPLATE_$1 := zynq
@@ -127,27 +149,33 @@ PL_CONFIG_$1 := $$(PL_PROJ_$1)/project-spec/configs/config
 PL_ROOTFS_CONFIG_$1 := $$(PL_PROJ_$1)/project-spec/configs/rootfs_config
 MODULES_$1 := $$(PL_PROJ_$1)/build/tmp/deploy/images/modules-plnx_$$(ARCH_$1).tgz
 KERNEL_RPM_$1 := $$(PL_PROJ_$1)/build/tmp/deploy/rpm/kernel-devsrc-1.0-r0.plnx_$$(ARCH_$1).rpm
+PL_ENV_$1 := PYNQ_BOARDNAME=$1 FPGA_MANAGER=$$(FPGA_MANAGER_$1)
 
-BOOT_FILES_$1 := $$(BOOT_ROOT_$1)/image.ub $$(BOOT_ROOT_$1)/BOOT.BIN
+BOOT_FILES_$1 := $$(BOOT_ROOT_$1)/image.ub $$(BOOT_ROOT_$1)/BOOT.BIN $$(BOOT_ROOT_$1)/boot.scr
 BOOT_DEPENDS_$1 := $$(patsubst %, $$(PL_PROJ_$1)/images/linux/%, $$(BOOT_$$(ARCH_$1)))
 $$(PL_PROJ_$1): $$(BSP_TARGET_$1)
 	-rm -rf $$(PL_PROJ_$1)
 	cd $$(BUILD_ROOT_$1) && petalinux-create -t project \
 		-s $$(BSP_BUILD_$1)/$$(BSP_PROJECT_$1).bsp -n petalinux_project
 	echo 'CONFIG_USER_LAYER_0="'$(CURDIR)/boot/meta-pynq'"' >> $$(PL_CONFIG_$1)
-	echo 'CONFIG_SUBSYSTEM_ROOTFS_SD=y' >> $$(PL_CONFIG_$1)
+	echo 'CONFIG_SUBSYSTEM_ROOTFS_EXT4=y' >> $$(PL_CONFIG_$1)
+	echo 'CONFIG_SUBSYSTEM_SDROOT_DEV="/dev/mmcblk0p2"' >> $$(PL_CONFIG_$1)
 	echo 'CONFIG_SUBSYSTEM_ETHERNET_MANUAL_SELECT=y' >> $$(PL_CONFIG_$1)
-	echo 'CONFIG_SUBSYSTEM_DEVICETREE_FLAGS="-@"' >> $$(PL_CONFIG_$1)
-	echo 'CONFIG_SUBSYSTEM_DTB_OVERLAY=y' >> $$(PL_CONFIG_$1)
-	echo 'CONFIG_SUBSYSTEM_FPGA_MANAGER=y' >> $$(PL_CONFIG_$1)
-	# xrt only supports aarch64 in 2019.1; to remove in next release
-	if [ $$(ARCH_$1) = aarch64 ]; then \
-		echo 'CONFIG_xrt=y' >> $$(PL_ROOTFS_CONFIG_$1) ;\
-		echo 'CONFIG_xrt-dev=y' >> $$(PL_ROOTFS_CONFIG_$1) ;\
-		echo 'CONFIG_zocl=y' >> $$(PL_ROOTFS_CONFIG_$1) ;\
-		echo 'CONFIG_opencl-headers-dev=y' >> $$(PL_ROOTFS_CONFIG_$1) ;\
-		echo 'CONFIG_opencl-clhpp-dev=y' >> $$(PL_ROOTFS_CONFIG_$1) ;\
+	if [ $$(FPGA_MANAGER_$1) = 1 ]; then \
+		echo 'CONFIG_SUBSYSTEM_DEVICETREE_FLAGS="-@"' >> $$(PL_CONFIG_$1) ;\
+		echo 'CONFIG_SUBSYSTEM_DTB_OVERLAY=y' >> $$(PL_CONFIG_$1) ;\
+		echo 'CONFIG_SUBSYSTEM_FPGA_MANAGER=y' >> $$(PL_CONFIG_$1) ;\
+	else \
+		echo 'CONFIG_SUBSYSTEM_REMOVE_PL_DTB=y' >> $$(PL_CONFIG_$1) ;\
 	fi
+	if [ -z $$(BSP_$1) ]; then \
+                echo 'CONFIG_SUBSYSTEM_REMOVE_PL_DTB=y' >> $$(PL_CONFIG_$1) ;\
+        fi
+	echo 'CONFIG_xrt=y' >> $$(PL_ROOTFS_CONFIG_$1)
+	echo 'CONFIG_xrt-dev=y' >> $$(PL_ROOTFS_CONFIG_$1)
+	echo 'CONFIG_zocl=y' >> $$(PL_ROOTFS_CONFIG_$1)
+	echo 'CONFIG_opencl-headers-dev=y' >> $$(PL_ROOTFS_CONFIG_$1)
+	echo 'CONFIG_opencl-clhpp-dev=y' >> $$(PL_ROOTFS_CONFIG_$1)
 	petalinux-config --silentconfig -p $$(PL_PROJ_$1)
 
 $$(BOOT_ROOT_$1)/BOOT.BIN : $$(BOOT_DEPENDS_$1) $$(BOOT_BITSTREAM_$1) | $$(BOOT_ROOT_$1)
@@ -157,35 +185,39 @@ $$(BOOT_ROOT_$1)/BOOT.BIN : $$(BOOT_DEPENDS_$1) $$(BOOT_BITSTREAM_$1) | $$(BOOT_
 $$(BOOT_ROOT_$1)/image.ub : $$(BUILD_ROOT_$1)/image.its $$(BUILD_ROOT_$1)/system.dtb $$(BUILD_ROOT_$1)/$$(KERNEL_$$(ARCH_$1)) | $$(BOOT_ROOT_$1)
 	cd $$(BOOT_ROOT_$1) && mkimage -f $$(BUILD_ROOT_$1)/image.its $$@
 
+$$(BOOT_ROOT_$1)/boot.scr : $$(BOOT_DEPENDS_$1) | $$(BOOT_ROOT_$1)
+	$$(PL_ENV_$1) petalinux-build -c u-boot-zynq-scr -p $$(PL_PROJ_$1)
+	cp -f $$(PL_PROJ_$1)/images/linux/boot.scr $$@
+
 $$(BUILD_ROOT_$1)/image.its: $$(CURDIR)/boot/image_$$(ARCH_$1).its | $$(BUILD_ROOT_$1)
 	cp $$< $$@
 
 $$(PL_CONFIG_$1): | $$(BSP_BUILD_$1) $$(PL_PROJ_$1)
 
 $$(PL_PROJ_$1)/images/linux/%_fsbl.elf: $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c bootloader -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c bootloader -p $$(PL_PROJ_$1)
 
 $$(PL_PROJ_$1)/images/linux/u-boot.elf: $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c u-boot -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c u-boot -p $$(PL_PROJ_$1)
 
 $$(PL_PROJ_$1)/images/linux/$$(KERNEL_$$(ARCH_$1)): $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c kernel -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c kernel -p $$(PL_PROJ_$1)
 
 $$(PL_PROJ_$1)/images/linux/system.dtb:  $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c device-tree -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c device-tree -p $$(PL_PROJ_$1)
 
 $$(PL_PROJ_$1)/images/linux/pmufw.elf:  $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c pmufw -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c pmufw -p $$(PL_PROJ_$1)
 
 $$(PL_PROJ_$1)/images/linux/bl31.elf:  $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c arm-trusted-firmware -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c arm-trusted-firmware -p $$(PL_PROJ_$1)
 
 $$(MODULES_$1): $$(PL_PROJ_$1)/images/linux/$$(KERNEL_$$(ARCH_$1))
 	cp -f $$(PL_PROJ_$1)/build/tmp/deploy/images/*/modules--*.tgz \
 	$$(MODULES_$1)
 
 $$(KERNEL_RPM_$1): $$(PL_CONFIG_$1)
-	PYNQ_BOARDNAME=$1 petalinux-build -c kernel-devsrc -p $$(PL_PROJ_$1)
+	$$(PL_ENV_$1) petalinux-build -c kernel-devsrc -p $$(PL_PROJ_$1)
 	cp -f $$(PL_PROJ_$1)/build/tmp/deploy/rpm/*/kernel-devsrc-1.0-r0.*.rpm \
 	$$(KERNEL_RPM_$1)
 
@@ -198,29 +230,40 @@ $$(BUILD_ROOT_$1):
 $$(BOOT_ROOT_$1):
 	mkdir -p $$@
 
-BASE_$1 ?= $$(UBUNTU_RELEASE).$$(ARCH_$1).$$(VERSION).img
-ifeq ($$(PREBUILT),)
-	BASE_PATH_$1 := $$(IMAGE_ROOT)/$$(BASE_$1)
+BASE_$1 ?= $$(UBUNTU_RELEASE).$$(ARCH_$1).$$(VERSION).tar.gz
+
+ifdef REBUILD_PYNQ_ROOTFS
+BASE_PATH_$1 = $$(IMAGE_ROOT)/$$(BASE_$1)
 else
-	BASE_PATH_$1 := $$(PREBUILT)
+BASE_PATH_$1 = $$(PYNQ_ROOTFS)
 endif
+
 STAGE4_DEPENDS_$1 := $$(foreach package, $$(STAGE4_PACKAGES_$1), $$(PACKAGE_BUILD_$$(package)_$1) $$(PACKAGE_BUILD_$$(package)))
 STAGING_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1
 
-$$(IMAGE_$1) : $$(BASE_PATH_$1) $$(STAGE4_DEPENDS_$1) $$(BOOT_FILES_$1) $$(MODULES_$1) $$(KERNEL_RPM_$1) | $$(CCACHEDIR)
-	cp --sparse=always $$(BASE_PATH_$1) $$(IMAGE_$1)
-	$$(SCRIPT_DIR)/mount_image.sh $$(IMAGE_$1) $$(STAGING_$1)
+$$(ROOT_$1) : $$(BASE_PATH_$1) $$(STAGE4_DEPENDS_$1) $$(MODULES_$1) $$(KERNEL_RPM_$1) | $$(CCACHEDIR)
+	sudo rm -fr $$(STAGING_$1)
+	mkdir $$(STAGING_$1)
+	(cd $$(STAGING_$1) && sudo tar -xf $$(realpath $$<))
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/install_packages.sh $$(STAGING_$1) $$(STAGE4_PACKAGES_$1)
-	sudo cp $$(BOOT_FILES_$1) $$(STAGING_$1)/boot
 	mkdir -p $$(BUILD_ROOT_$1)/modules
 	cd $$(BUILD_ROOT_$1)/modules && tar -xf $$(MODULES_$1)
-	sudo cp -r --no-preserve=ownership $$(BUILD_ROOT_$1)/modules/* $$(STAGING_$1)
+	sudo cp -r --no-preserve=ownership $$(BUILD_ROOT_$1)/modules/lib/* $$(STAGING_$1)/usr/lib/
 	rm -rf $$(BUILD_ROOT_$1)/modules
+	sudo mount -o bind /dev $$(STAGING_$1)/dev
 	rpm2cpio $$(KERNEL_RPM_$1) | sudo chroot $$(STAGING_$1) cpio -id
 	sudo chroot $$(STAGING_$1) depmod -a $$(LINUX_VERSION)
-	sudo chroot $$(STAGING_$1) tar czf kernel.tgz /usr/src/kernel
-	sudo chroot $$(STAGING_$1) rm -rf /usr/src/kernel
-	$$(SCRIPT_DIR)/resize_umount.sh $$(IMAGE_$1) $$(STAGING_$1)
+	sudo umount -l $$(STAGING_$1)/dev
+	rm -rf $$(EXTRA_BOOT_$1)
+	cp -r $$(STAGING_$1)/boot $$(EXTRA_BOOT_$1)
+	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
+
+
+$$(IMAGE_$1) : $$(ROOT_$1) $$(BOOT_FILES_$1)
+	sudo rm -rf $$(STAGING_$1)
+	mkdir $$(STAGING_$1)
+	cp $$(BOOT_FILES_$1) $$(STAGING_$1)
+	(cd $$(PL_PROJ_$1) && petalinux-package --wic --images-dir "$$(STAGING_$1)" --bootfiles "$$(notdir $$(BOOT_FILES_$1))" -c $$< --outdir $$(IMAGE_ROOT) --wks  $$(CURDIR)/boot/image.wks --extra-bootfiles "$$(EXTRA_BOOT_$1)/*:.") && mv $$(IMAGE_ROOT)/petalinux-sdimage.wic $$@
 
 
 SDX_DIR_$1 := $$(SDX_ROOT)/$1/sw
@@ -255,69 +298,73 @@ $$(SDX_IMAGE_DIR_$1)/image.ub: $$(BOOT_ROOT_$1)/image.ub | $$(SDX_IMAGE_DIR_$1)
 
 sdx_sw_$1: $$(SDX_FILES_$1)
 
-$$(SYSROOT_$1): $$(IMAGE_$1) | $$(SYSROOT_ROOT)
+$$(SYSROOT_$1): $$(ROOT_$1) | $$(SYSROOT_ROOT)
 	-rm -rf $$@
-	mkdir -p $$@/usr
-	$$(SCRIPT_DIR)/mount_image.sh $$(IMAGE_$1) $$(STAGING_$1)
-	cp -rd $$(STAGING_$1)/usr/include $$@/usr
-	cp -rd $$(STAGING_$1)/usr/lib $$@/usr
-	cp -rd $$(STAGING_$1)/usr/share $$@/usr
-	cp -rd $$(STAGING_$1)/usr/local $$@/usr
-	cp -rd $$(STAGING_$1)/lib $$@
-	$$(SCRIPT_DIR)/unmount_image.sh $$(STAGING_$1) $$(IMAGE_$1)
+	mkdir -p $$@/usr $$@/lib $$@/opt
+	(cd $$@ && tar -xf $$(ROOT_$1) usr lib opt)
+	sudo chmod a+w -R $$@
 
 sysroot_$1 : $$(SYSROOT_$1)
 
 .PHONY: sysroot_$1 sdx_sw_$1
 
-endef
+endef ### BOARD SPECIFIC RULES ###
 
+
+############# BEGIN ARCH_SPECIFIC_RULES #########
 define ARCH_SPECIFIC_RULES
 # $1 is the architecture
 # Used to generate the board-independent root filesystems
-BASE_$1 := $$(IMAGE_ROOT)/$$(UBUNTU_RELEASE).$1.$$(VERSION).img
+BASE_$1 := $$(IMAGE_ROOT)/$$(UBUNTU_RELEASE).$1.$$(VERSION).tar.gz
 STAGING_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1
-STAGE1_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1.stage1.img
-STAGE2_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1.stage2.img
+STAGE1_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1.stage1.tar.gz
+STAGE2_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1.stage2.tar.gz
 STAGE2_DEPENDS_$1 := $$(foreach package, $$(STAGE2_PACKAGES_$1), $$(PACKAGE_BUILD_$$(package)_$1) $$(PACKAGE_BUILD_$$(package)))
 STAGE3_DEPENDS_$1 := $$(foreach package, $$(STAGE3_PACKAGES_$1), $$(PACKAGE_BUILD_$$(package)_$1) $$(PACKAGE_BUILD_$$(package)))
 CONFIG_$1 := $$(CURDIR)/ubuntu/$$(UBUNTU_RELEASE)/$1
 QEMU_$1 := $$(shell which qemu-$1-static)
-PACKAGE_ENV_$1 := QEMU_EXE=$$(QEMU_$1) PYNQ_BOARD=Unknown ARCH=$1
+PACKAGE_ENV_$1 := QEMU_EXE=$$(QEMU_$1) PYNQ_BOARD=Unknown ARCH=$1 PYNQ_SDIST=$(PYNQ_SDIST) PYNQ_ROOTFS=$(PYNQ_ROOTFS)
+
+ifdef REBUILD_PYNQ_SDIST
+SDIST_PATH_$1 = $$(BUILD_ROOT)/PYNQ/dist/*.tar.gz
+else
+SDIST_PATH_$1 = $$(PYNQ_SDIST)
+endif
+
 DIST_$1 := $$(DIST_ROOT)/$1
 
 $$(STAGE2_$1) : $$(STAGE1_$1) $$(STAGE2_DEPENDS_$1)
-	cp --sparse=always $$(STAGE1_$1) $$(STAGE2_$1)
-	$$(SCRIPT_DIR)/mount_image.sh $$(STAGE2_$1) $$(STAGING_$1)
+	sudo rm -rf $$(STAGING_$1)
+	mkdir $$(STAGING_$1)
+	(cd $$(STAGING_$1) && sudo tar -xf $$<)
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/install_packages.sh $$(STAGING_$1) $$(STAGE2_PACKAGES_$1)
-	$$(SCRIPT_DIR)/unmount_image.sh $$(STAGING_$1) $$(STAGE2_$1)
+	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
 
 $$(BASE_$1) : $$(STAGE2_$1) $$(STAGE3_DEPENDS_$1) | $$(IMAGE_ROOT)
-	cp --sparse=always $$(STAGE2_$1) $$(BASE_$1)
-	$$(SCRIPT_DIR)/mount_image.sh $$(BASE_$1) $$(STAGING_$1)
+	sudo rm -rf $$(STAGING_$1)
+	mkdir $$(STAGING_$1)
+	(cd $$(STAGING_$1) && sudo tar -xf $$<)
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/install_packages.sh $$(STAGING_$1) $$(STAGE3_PACKAGES_$1)
-	$$(SCRIPT_DIR)/unmount_image.sh $$(STAGING_$1) $$(BASE_$1)
+	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
 
 $$(STAGE1_$1): $$(CONFIG_$1)/multistrap.config | $$(BUILD_ROOT) $$(CCACHEDIR)
-	-rm -f $$@
-	$(SCRIPT_DIR)/create_mount_img.sh $$(STAGE1_$1) $$(STAGING_$1)
-	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/create_rootfs.sh $$(STAGING_$1) $$(CONFIG_$1)
-	$(SCRIPT_DIR)/unmount_image.sh $$(STAGING_$1) $$(STAGE1_$1)
-
-.PRECIOUS: $$(STAGE1_$1) $$(STAGE2_$2) $$(BASE_$1)
+	sudo rm -rf $$(STAGING_$1)
+	mkdir $$(STAGING_$1)
+	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/create_rootfs.sh $$(STAGING_$1) $$(CONFIG_$1) $$(ARCH_$1)
+	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
 
 qemu_check_$1:
 	$$(QEMU_$1) -version | fgrep ${QEMU_VERSION}
 
 $$(DIST_$1): $$(BASE_PATH_$1) | $$(DIST_ROOT)
 	mkdir -p $$@
-	cp -rf $$(BUILD_ROOT)/PYNQ/dist/*.tar.gz $$@
+	cp -rf $$(SDIST_PATH_$1) $$@
 
 dist_$1: $$(DIST_$1)
 
 .PHONY: qemu_check_$1 dist_$1
 
-endef
+endef  ### ARCH SPECIFIC RULES ###
 
 ifeq ($(ARCH_ONLY),)
 USED_ARCH := $(sort $(foreach board, $(BOARDS), $(value ARCH_$(board))))
@@ -339,16 +386,29 @@ ALL_PACKAGES := $(sort $(foreach board, $(BOARDS), $(value STAGE3_PACKAGES_$(boa
 PACKAGE_CLEAN := $(patsubst %,PACKAGE_CLEAN_%, $(ALL_PACKAGES))
 
 checkenv: $(patsubst %, qemu_check_%, $(USED_ARCH))
+ifeq ($(BOARDS),)
+	$(error No board .spec files found... please check BOARDDIR path: $(BOARDDIR))
+endif
+
+ifndef REBUILD_PYNQ_SDIST
+ifeq ($(wildcard $(PYNQ_SDIST)),)
+	$(error REBUILD_PYNQ_SDIST not set and PYNQ_SDIST file $(PYNQ_SDIST) does not exist)
+endif
+endif
+
+ifndef REBUILD_PYNQ_ROOTFS
+ifeq ($(wildcard $(PYNQ_ROOTFS)),)
+	$(error REBUILD_PYNQ_ROOTFS not set and PYNQ_ROOTFS file $(PYNQ_ROOTFS) does not exist)
+endif
+endif
+
 	vivado -version | fgrep ${KERNEL_VERSION}
-	xsdk -version | fgrep ${KERNEL_VERSION}
+	vitis -version | fgrep ${KERNEL_VERSION}
 	which petalinux-config
 	which arm-linux-gnueabihf-gcc
 	which microblaze-xilinx-elf-gcc
 	which ct-ng
-	which python | fgrep /usr/bin/python
-	sudo -n mount > /dev/null
 	bash $(SCRIPT_DIR)/check_env.sh
-	bash $(SCRIPT_DIR)/check_mounts.sh
 
 boot_files: checkenv $(BOOT_FILES)
 
@@ -373,5 +433,5 @@ clean: $(PACKAGE_CLEAN)
 	-rm -rf $(BUILD_ROOT)
 	-rm -rf $(IMAGE_ROOT)
 
-.PHONY: dist bsp boot_files images all clean real_all checkenv sdx_sw sysroot nocheck_images
-
+.PHONY: dist bsp boot_files images all clean \
+	real_all checkenv sdx_sw sysroot nocheck_images

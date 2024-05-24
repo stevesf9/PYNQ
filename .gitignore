@@ -14,9 +14,11 @@
 Thumbs.db
 thumbs.db
 
-# Logs and Databases
+# Logs, Databases and Journals
 ######################
 *.log
+*.jou
+*.vitis_hls_log*.xml
 
 # VIM Swap Files
 ######################
@@ -26,6 +28,11 @@ thumbs.db
 ######################
 build/
 sdcard/
+
+# Raw overlay files
+*.bit
+*.hwh
+*.xsa
 
 # Test failure outputs
 ######################

@@ -1,44 +1,13 @@
-#   Copyright (c) 2019, Xilinx, Inc.
-#   All rights reserved.
-#
-#   Redistribution and use in source and binary forms, with or without
-#   modification, are permitted provided that the following conditions are met:
-#
-#   1.  Redistributions of source code must retain the above copyright notice,
-#       this list of conditions and the following disclaimer.
-#
-#   2.  Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in the
-#       documentation and/or other materials provided with the distribution.
-#
-#   3.  Neither the name of the copyright holder nor the names of its
-#       contributors may be used to endorse or promote products derived from
-#       this software without specific prior written permission.
-#
-#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-#   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-#   THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-#   PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
-#   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-#   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-#   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-#   OR BUSINESS INTERRUPTION). HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-#   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-#   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-#   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#   Copyright (c) 2019-2021, Xilinx, Inc.
+#   SPDX-License-Identifier: BSD-3-Clause
 
 
-__author__ = "Peter Ogden"
-__copyright__ = "Copyright 2019, Xilinx"
-__email__ = "pynq_support@xilinx.com"
 
 import ctypes
+import itertools
 from copy import deepcopy
 from xml.etree import ElementTree
-try:
-    import xclbin_binding as xclbin
-except ImportError:
-    from pynq import xclbin
+from pynq._3rdparty import xclbin
 
 _mem_types = [
     "DDR3",
@@ -58,11 +27,13 @@ def _xclxml_to_ip_dict(raw_xml, xclbin_uuid):
     xml = ElementTree.fromstring(raw_xml)
     ip_dict = {}
     for kernel in xml.findall('platform/device/core/kernel'):
-        if 'hwControlProtocl' in kernel.attrib:
-            control_protocol = kernel.attrib['hwControlProtocl']
+        if 'hwControlProtocol' in kernel.attrib:
+            control_protocol = kernel.attrib['hwControlProtocol']
         else:
             control_protocol = 's_axilite'
         slaves = {n.attrib['name']: n for n in kernel.findall('port[@mode="slave"]')}
+        if not slaves:
+            continue
         masters = {n.attrib['name']: n for n in kernel.findall('port[@mode="master"]')}
         readonly = {n.attrib['name']: n for n in kernel.findall('port[@mode="read_only"]')}
         writeonly = {n.attrib['name']: n for n in kernel.findall('port[@mode="write_only"]')}
@@ -110,12 +81,15 @@ def _xclxml_to_ip_dict(raw_xml, xclbin_uuid):
             }
         }
         if control_protocol == 'ap_ctrl_chain':
-            registers['fields']['AP_CONTINUE'] = {
+            registers['CTRL']['fields']['AP_CONTINUE'] = {
                 'access': 'read-write',
                 'bit_offset': 4,
                 'bit_width': 1,
                 'description': 'Invoke next iteration of kernel'
             }
+        elif control_protocol == 'ap_ctrl_none' or \
+                control_protocol == 'user_managed':
+            registers = {}
         streams = {}
         for arg in kernel.findall('arg'):
             attrib = arg.attrib
@@ -137,36 +111,49 @@ def _xclxml_to_ip_dict(raw_xml, xclbin_uuid):
                     direction = 'output'
                 else:
                     raise RuntimeError('Could not determine port direction')
+                sid = attrib.get('id')
                 streams[attrib['name']] = {
-                    'id': int(attrib['id']),
-                    'type': attrib['type'],
+                    'id': int(sid) if sid else None,
+                    'type': attrib.get('type'),
                     'direction': direction
                 }
         for instance in kernel.findall('instance'):
-            ip_dict[instance.attrib['name']] = {
-                'phys_addr': int(instance.find('addrRemap').attrib['base'], 0),
-                'addr_range': addr_size,
-                'type': kernel.attrib['vlnv'],
-                'fullpath': instance.attrib['name'],
-                'registers': deepcopy(registers),
-                'streams': deepcopy(streams),
-                'mem_id': None,
-                'state': None,
-                'interrupts': {},
-                'gpio': {},
-                'xclbin_uuid': xclbin_uuid
-            }
-    for i, d in enumerate(sorted(ip_dict.values(), key=lambda x: x['phys_addr'])):
-        d['adjusted_index'] = i
+            try:
+                phys_addr = int(instance.find('addrRemap').attrib['base'], 0)
+            except ValueError:
+                phys_addr = None
+
+            if phys_addr is not None:
+                ip_dict[instance.attrib['name']] = {
+                    'phys_addr': phys_addr,
+                    'addr_range': addr_size,
+                    'type': kernel.attrib['vlnv'],
+                    'hw_control_protocol': control_protocol,
+                    'fullpath': instance.attrib['name'],
+                    'registers': deepcopy(registers),
+                    'streams': deepcopy(streams),
+                    'mem_id': None,
+                    'state': None,
+                    'interrupts': {},
+                    'gpio': {},
+                    'xclbin_uuid': xclbin_uuid,
+                    'cu_name': ":".join((kernel.attrib['name'],
+                                         instance.attrib['name']))
+                }
+    for i, d in enumerate(sorted(ip_dict.values(),
+                          key=lambda x: x['phys_addr'])): d['cu_index'] = i
     return {k: v for k, v in sorted(ip_dict.items())}
 
 
 def _add_argument_memory(ip_dict, ip_data, connections, memories):
     import ctypes
-    connection_dict = {
-        (c.m_ip_layout_index, c.arg_index): c.mem_data_index
-        for c in connections
-    }
+    connection_dict = dict()
+    for c in connections:
+        key = c.m_ip_layout_index, c.arg_index
+        if key not in connection_dict.keys():
+            connection_dict[key] = list()
+        connection_dict[key].append(memories[c.mem_data_index])
+
     for ip_index, ip in enumerate(ip_data):
         if ip.m_type != 1:
             continue
@@ -179,11 +166,13 @@ def _add_argument_memory(ip_dict, ip_data, connections, memories):
         for r in dict_entry['registers'].values():
             # Subtract 1 from the register index to account for AP_CTRL
             if (ip_index, r['id']) in connection_dict:
-                r['memory'] = \
-                    memories[connection_dict[(ip_index, r['id'])]].decode()
+                memory = connection_dict[(ip_index, r['id'])]
+                r['memory'] = memory[-1]
+                if len(memory) > 1:
+                    r['MBG'] = memory
         for r in dict_entry['streams'].values():
             if (ip_index, r['id']) in connection_dict:
-                r['stream_id'] = connection_dict[(ip_index, r['id'])]
+                r['stream_id'] = connection_dict[(ip_index, r['id'])][-1]
 
 
 def _get_buffer_slice(b, offset, length):
@@ -195,9 +184,9 @@ def _get_object_as_array(obj, number):
     return ctype.from_address(ctypes.addressof(obj))
 
 
-def _mem_data_to_dict(idx, mem):
+def _mem_data_to_dict(idx, mem, tag):
     if mem.m_type == 9:
-        # Streaming Endpoing
+        # Streaming Endpoint
         return {
             "raw_type": mem.m_type,
             "used": mem.m_used,
@@ -205,7 +194,8 @@ def _mem_data_to_dict(idx, mem):
             "route_id": mem.mem_u1.route_id,
             "type": _mem_types[mem.m_type],
             "streaming": True,
-            "idx": idx
+            "idx": idx,
+            "tag": tag
         }
     else:
         return {
@@ -215,13 +205,40 @@ def _mem_data_to_dict(idx, mem):
             "size": mem.mem_u1.m_size * 1024,
             "type": _mem_types[mem.m_type],
             "streaming": False,
-            "idx": idx
+            "idx": idx,
+            "tag": tag
         }
 
 
-def _xclbin_to_dicts(filename):
-    with open(filename, 'rb') as f:
-        binfile = bytearray(f.read())
+_clock_types = [
+    "UNUSED",
+    "DATA",
+    "KERNEL",
+    "SYSTEM"
+]
+
+
+def _clk_data_to_dict(clk_data):
+    """Create a dictionary of dictionaries for the clock data.
+    The clocks will be sorted depending on the clock type.
+    """
+
+    clk_dict = {}
+    idx = 0
+    for i in _clock_types:
+        for j, clk in enumerate(clk_data):
+            clk_i = {
+                "name": clk.m_name.decode("utf-8"),
+                "frequency": clk.m_freq_Mhz,
+                "type": _clock_types[clk.m_type]}
+            if _clock_types[clk.m_type] is i:
+                clk_dict['clock'+str(idx)] = clk_i
+                idx += 1
+
+    return clk_dict
+
+def parse_xclbin_header(xclbin_data):
+    binfile = bytearray(xclbin_data)
     header = xclbin.axlf.from_buffer(binfile)
     section_headers = _get_object_as_array(
         header.m_sections, header.m_header.m_numSections)
@@ -229,30 +246,69 @@ def _xclbin_to_dicts(filename):
         s.m_sectionKind: _get_buffer_slice(
             binfile, s.m_sectionOffset, s.m_sectionSize)
         for s in section_headers}
+    return sections, bytes(header.m_header.u2.uuid).hex()
 
-    xclbin_uuid = bytes(header.m_header.u2.uuid).hex()
+
+def _xclbin_to_dicts(filename, xclbin_data=None):
+    if xclbin_data is None:
+         with open(filename, 'rb') as f:
+             xclbin_data = bytearray(f.read())
+    sections, xclbin_uuid = parse_xclbin_header(xclbin_data)
 
     ip_dict = _xclxml_to_ip_dict(
         sections[xclbin.AXLF_SECTION_KIND.EMBEDDED_METADATA].decode(),
         xclbin_uuid)
-    ip_layout = xclbin.ip_layout.from_buffer(
-        sections[xclbin.AXLF_SECTION_KIND.IP_LAYOUT])
-    ip_data = _get_object_as_array(ip_layout.m_ip_data[0], ip_layout.m_count)
-    connectivity = xclbin.connectivity.from_buffer(
-        sections[xclbin.AXLF_SECTION_KIND.CONNECTIVITY])
-    connections = _get_object_as_array(connectivity.m_connection[0],
-                                       connectivity.m_count)
 
-    mem_topology = xclbin.mem_topology.from_buffer(
-        sections[xclbin.AXLF_SECTION_KIND.MEM_TOPOLOGY])
-    mem_data = _get_object_as_array(mem_topology.m_mem_data[0],
-                                    mem_topology.m_count)
-    memories = {i: ctypes.string_at(m.m_tag) for i, m in enumerate(mem_data)}
-    mem_dict = {memories[i].decode(): _mem_data_to_dict(i, mem)
-                for i, mem in enumerate(mem_data)}
+    if xclbin.AXLF_SECTION_KIND.IP_LAYOUT in sections:
+        ip_layout = xclbin.ip_layout.from_buffer(
+            sections[xclbin.AXLF_SECTION_KIND.IP_LAYOUT])
+        ip_data = _get_object_as_array(ip_layout.m_ip_data[0], ip_layout.m_count)
+    else:
+        ip_data = []
+
+    if xclbin.AXLF_SECTION_KIND.CONNECTIVITY in sections:
+        connectivity = xclbin.connectivity.from_buffer(
+            sections[xclbin.AXLF_SECTION_KIND.CONNECTIVITY])
+        connections = _get_object_as_array(connectivity.m_connection[0],
+                                           connectivity.m_count)
+    elif xclbin.AXLF_SECTION_KIND.GROUP_CONNECTIVITY in sections:
+        connectivity = xclbin.connectivity.from_buffer(
+            sections[xclbin.AXLF_SECTION_KIND.GROUP_CONNECTIVITY])
+        connections = _get_object_as_array(connectivity.m_connection[0],
+                                           connectivity.m_count)
+    else:
+        connections = []
+
+    if xclbin.AXLF_SECTION_KIND.MEM_TOPOLOGY in sections:
+        mem_topology = xclbin.mem_topology.from_buffer(
+            sections[xclbin.AXLF_SECTION_KIND.MEM_TOPOLOGY])
+        mem_data = _get_object_as_array(mem_topology.m_mem_data[0],
+                                        mem_topology.m_count)
+    elif xclbin.AXLF_SECTION_KIND.GROUP_TOPOLOGY in sections:
+        mem_topology = xclbin.mem_topology.from_buffer(
+            sections[xclbin.AXLF_SECTION_KIND.GROUP_TOPOLOGY])
+        mem_data = _get_object_as_array(mem_topology.m_mem_data[0],
+                                        mem_topology.m_count)
+    else:
+        mem_data = []
+
+    memories = [ctypes.string_at(m.m_tag).decode() for m in mem_data]
+    mem_dict = {tag: _mem_data_to_dict(i, mem, tag)
+                for i, tag, mem in zip(itertools.count(), memories, mem_data)}
     _add_argument_memory(ip_dict, ip_data, connections, memories)
+    
+    if xclbin.AXLF_SECTION_KIND.CLOCK_FREQ_TOPOLOGY in sections:
+        clock_topology = xclbin.clock_freq_topology.from_buffer(
+              sections[xclbin.AXLF_SECTION_KIND.CLOCK_FREQ_TOPOLOGY])
 
-    return ip_dict, mem_dict
+        clk_data = _get_object_as_array(clock_topology.m_clock_freq[0],
+                                        clock_topology.m_count)
+
+        clock_dict = _clk_data_to_dict(clk_data)
+    else:
+        clock_dict = {}
+
+    return ip_dict, mem_dict, clock_dict
 
 
 class XclBin:
@@ -262,7 +318,7 @@ class XclBin:
     ----
     This class requires the absolute path of the '.xclbin' file.
     Most of the dictionaries are empty to ensure compatibility
-    with the HWH and TCL files.
+    with the HWH files.
 
     Attributes
     ----------
@@ -279,13 +335,21 @@ class XclBin:
     mem_dict : dict
         All of the memory regions and streaming connections in the design:
         {str: {'used' : bool, 'base_address' : int, 'size' : int, 'idx' : int,\
-               'raw_type' : int, 'tyoe' : str, 'streaming' : bool}}.
+               'raw_type' : int, 'type' : str, 'streaming' : bool}}.
+
+    clock_dict : dict
+        All of the clocks in the design:
+        {str: {'name' : str, 'frequency' : int, 'type' : str}}.
 
     """
-    def __init__(self, filename):
-        self.ip_dict, self.mem_dict = _xclbin_to_dicts(filename)
+    def __init__(self, filename="", xclbin_data=None):
+        self.ip_dict, self.mem_dict, self.clock_dict = \
+            _xclbin_to_dicts(filename, xclbin_data)
         self.gpio_dict = {}
         self.interrupt_controllers = {}
         self.interrupt_pins = {}
         self.hierarchy_dict = {}
-        self.clock_dict = {}
+        self.xclbin_data = xclbin_data
+        self.systemgraph = None
+
+

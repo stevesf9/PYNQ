@@ -1,4 +1,4 @@
-.. Python productivity for Zynq® (PYNQ) documentation master file, created by
+.. Python productivity (PYNQ) documentation master file, created by
    sphinx-quickstart on Mon Mar 28 22:10:04 2016.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
@@ -7,31 +7,27 @@
 PYNQ Introduction
 *****************
 
-Xilinx® makes Zynq® and Zynq Ultrascale+™ devices, a class of programmable System on Chip (SoC)
-which integrates a multi-core processor (Dual-core ARM® Cortex®-A9 or Quad-core ARM® Cortex®-A53) and a Field
-Programmable Gate Array (FPGA) into a single integrated circuit.  FPGA, or
-programmable logic, and microprocessors are complementary technologies for
-embedded systems.  Each meets distinct requirements for embedded systems that
-the other cannot perform as well.
+PYNQ is an open-source project from AMD. It provides a Jupyter-based 
+framework with Python APIs for using AMD Xilinx Adaptive Computing platforms. 
+PYNQ supports Zynq® and Zynq Ultrascale+™, Zynq RFSoC™, Kria™ SOMs, Alveo™ 
+and AWS-F1 instances. 
 
-Project Goals
-=============
-
-The main goal of **PYNQ**, **Py**\ thon Productivity for Zy\ **nq**, is to make
-it easier for designers of embedded systems to exploit the unique benefits of
-Xilinx devices in their applications. Specifically, PYNQ enables architects, engineers
-and programmers who design embedded systems to use Zynq devices, without having
+PYNQ enables architects, engineers
+and programmers who design embedded systems to use Adaptive Computing 
+platforms, without having
 to use ASIC-style design tools to design programmable logic circuits.
 
-PYNQ achieves this goal in three ways:
+
+PYNQ Background
+===============
 
 * Programmable logic circuits are presented as hardware libraries called
   *overlays*.  These overlays are analogous to software libraries.  A software
   engineer can select the overlay that best matches their application.  The
-  overlay can be accessed through an application programming interface
-  (API). Creating a new overlay still requires engineers with expertise in
-  designing programmable logic circuits.  The key difference however, is the
-  *build once, re-use many times* paradigm.  Overlays, like software libraries,
+  overlay can be accessed through an Python API. Creating a new overlay still 
+  requires engineers with expertise in designing programmable logic circuits.  
+  The key difference however, is the
+  *build once, re-use many times* paradigm. Overlays, like software libraries,
   are designed to be configurable and re-used as often as possible in many
   different applications.
 
@@ -41,17 +37,17 @@ PYNQ achieves this goal in three ways:
     thousands of embedded designers.  The kernel is developed and maintained by
     fewer than one thousand, high-skilled, software architects and engineers.
     The extensive re-use of the work of a relatively small number of very
-    talented engineers enables many more software engineers to work at higher
+    talented engineers enable many more software engineers to work at higher
     levels of abstraction. Hardware libraries or *overlays* are inspired by the
     success of the Linux kernel model in abstracting so many of the details of
     low-level, hardware-dependent software.
 
 
-* PYNQ uses Python for programming both the embedded processors and the
+* PYNQ supports Python for programming both the embedded processors and the
   overlays.  Python is a "productivity-level" language.  To date, C or C++ are
   the most common, embedded programming languages.  In contrast, Python raises
   the level of programming abstraction and programmer productivity. These are
-  not mutually-exclusive choices, however.  PYNQ uses CPython which is written
+  not mutually exclusive choices, however.  PYNQ uses CPython which is written
   in C, and integrates thousands of C libraries and can be extended with
   optimized code written in C.  Wherever practical, the more productive Python
   environment should be used, and whenever efficiency dictates, lower-level C
@@ -62,17 +58,18 @@ PYNQ achieves this goal in three ways:
   operating system.  This goal is achieved by adopting a web-based architecture,
   which is also browser agnostic.  We incorporate the open-source Jupyter
   notebook infrastructure to run an Interactive Python (IPython) kernel and a
-  web server directly on the ARM processor of the Zynq device.  The web server
+  web server directly on the ARM processor of the Zynq device, or host processor
+  in the case of Alveo and AWS-F1.  The web server
   brokers access to the kernel via a suite of browser-based tools that provide a
   dashboard, bash terminal, code editors and Jupyter notebooks.  The browser
   tools are implemented with a combination of JavaScript, HTML and CSS and run
   on any modern browser.
 
 Summary
-=======
+#######
 
 PYNQ is the first project to combine the following elements to simplify and
-improve APSoC design:
+improve Adaptive Computing system design:
 
 #. A high-level productivity language (Python in this case)
 #. FPGA overlays with extensive APIs exposed as Python libraries 
@@ -85,19 +82,12 @@ improve APSoC design:
    :hidden:
    
    getting_started
-   jupyter_notebooks
-   python_environment
    pynq_overlays
-   pynq_alveo
    pynq_libraries
    overlay_design_methodology
    pynq_sd_card
-   pynq_cli
    pynq_package
-   verification
    faqs
-   glossary
-   references
    appendix
    changelog
 

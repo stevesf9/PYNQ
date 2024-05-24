@@ -1,31 +1,5 @@
-#   Copyright (c) 2019, Xilinx, Inc.
-#   All rights reserved.
-#
-#   Redistribution and use in source and binary forms, with or without
-#   modification, are permitted provided that the following conditions are met:
-#
-#   1.  Redistributions of source code must retain the above copyright notice,
-#       this list of conditions and the following disclaimer.
-#
-#   2.  Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in the
-#       documentation and/or other materials provided with the distribution.
-#
-#   3.  Neither the name of the copyright holder nor the names of its
-#       contributors may be used to endorse or promote products derived from
-#       this software without specific prior written permission.
-#
-#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-#   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-#   THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-#   PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
-#   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-#   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-#   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-#   OR BUSINESS INTERRUPTION). HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-#   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-#   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-#   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#   Copyright (c) 2021, Xilinx, Inc.
+#   SPDX-License-Identifier: BSD-3-Clause
 
 import functools
 import textwrap
@@ -33,9 +7,6 @@ import numpy as np
 import re
 import warnings
 
-__author__ = "Peter Ogden, Yun Rock Qu"
-__copyright__ = "Copyright 2019, Xilinx"
-__email__ = "pynq_support@xilinx.com"
 
 
 def _wrap_docstring(doc):
@@ -52,6 +23,45 @@ def _safe_attrname(name):
     if name[0].isdigit():
         name = "r" + name
     return re.sub(r'[^a-zA-Z0-9_]', '_', name)
+
+
+def _calc_index(index, width):
+    """Returns a tuple of (lower, upper, reversed)
+
+    """
+    if isinstance(index, int):
+        return index, index, False
+    elif isinstance(index, slice):
+        start, stop, step = index.start, index.stop, index.step
+        if step is None or step == -1:
+            if start is None:
+                start = width - 1
+            if stop is None:
+                stop = 0
+        elif step == 1:
+            if start is None:
+                start = 0
+            if stop is None:
+                stop = width - 1
+        else:
+            raise ValueError("Slicing step is not valid.")
+        if start not in range(width):
+            raise ValueError("Slicing endpoint {0} not in range "
+                             "0 - {1}".format(start, width - 1))
+        if stop not in range(width):
+            raise ValueError("Slicing endpoint {0} not in range "
+                             "0 - {1}".format(stop, width - 1))
+
+        if start >= stop:
+            return stop, start, False
+        else:
+            return start, stop, True
+    else:
+        raise ValueError("Index must be int or slice.")
+
+
+def _reverse_bits(val, width):
+    return int('{:0{width}b}'.format(val, width=width)[::-1], 2)
 
 
 class Register:
@@ -81,7 +91,8 @@ class Register:
 
     """
 
-    def __init__(self, address, width=32, debug=False, buffer=None):
+    def __init__(self, address, width=32, debug=False, buffer=None,
+                 access='read-write'):
         """Instantiate a register object.
 
         Parameters
@@ -102,6 +113,7 @@ class Register:
         self.address = address
         self.width = width
         self.debug = debug
+        self.access = access
 
         if width == 32:
             register_type = 'u4'
@@ -131,47 +143,24 @@ class Register:
             The integer index, or slice to access the register value.
 
         """
-
-        curr_val = self._buffer[0]
-        if isinstance(index, int):
+        lower, upper, reverse = _calc_index(index, self.width)
+        curr_val = int(self._buffer[0])
+        if self.access == 'write-only':
+            return self.access
+        if lower == upper:
             self._debug("Reading index {} at address {}"
                         .format(index, hex(self.address)))
-            mask = 1 << index
-            return (curr_val & mask) >> index
-        elif isinstance(index, slice):
-            start, stop, step = index.start, index.stop, index.step
-            self._debug("Reading bits {}:{} at address {}"
-                        .format(start, stop, hex(self.address)))
-            if step is None or step == -1:
-                if start is None:
-                    start = self.width - 1
-                if stop is None:
-                    stop = 0
-            elif step == 1:
-                if start is None:
-                    start = 0
-                if stop is None:
-                    stop = self.width - 1
-            else:
-                raise ValueError("Slicing step is not valid.")
-            if start not in range(self.width):
-                raise ValueError("Slice endpoint {0} not in range "
-                                 "0 - {1}".format(start, self.width))
-            if stop not in range(self.width):
-                raise ValueError("Slicing endpoint {0} not in range "
-                                 "0 - {1}".format(stop, self.width))
-
-            if start >= stop:
-                mask = ((1 << (start - stop + 1)) - 1) << stop
-                return int((curr_val & mask) >> stop)
-            else:
-                width = stop - start + 1
-                mask = ((1 << width) - 1) << start
-                reg_val = (curr_val & mask) >> start
-                return int('{:0{width}b}'.format(reg_val,
-                                                 width=width)[::-1], 2)
+            mask = 1 << lower
+            return (curr_val & mask) >> lower
         else:
-            raise ValueError("Index must be int or slice.")
+            self._debug("Reading bits {}:{} at address {}"
+                        .format(upper, lower, hex(self.address)))
+            width = upper - lower + 1
+            mask = (1 << width) - 1
+            raw = (curr_val >> lower) & mask
+            if reverse:
+                raw = _reverse_bits(raw, width)
+            return raw
 
     def __setitem__(self, index, value):
         """Set the register value.
@@ -184,47 +173,31 @@ class Register:
             The integer index, or slice to access the register value.
 
         """
-
-        curr_val = self._buffer[0]
-        if isinstance(index, int):
+        lower, upper, reverse = _calc_index(index, self.width)
+        if upper == lower:
             if value != 0 and value != 1:
                 raise ValueError("Value to be set should be either 0 or 1.")
             self._debug("Setting bit {} at address {} to {}"
-                        .format(index, hex(self.address), value))
-            mask = 1 << index
-            self._buffer[0] = (curr_val & ~mask) | (value << index)
-        elif isinstance(index, slice):
-            count = self.count(index, width=self.width)
-            start, stop, step = index.start, index.stop, index.step
-            if step is None or step == -1:
-                if start is None:
-                    start = self.width - 1
-                if stop is None:
-                    stop = 0
-            elif step == 1:
-                if start is None:
-                    start = 0
-                if stop is None:
-                    stop = self.width - 1
-            else:
-                raise ValueError("Slicing step is not valid.")
-            if start not in range(self.width):
-                raise ValueError("Slicing endpoint {} is not in range 0 - {}."
-                                 .format(start, self.width))
-            if stop not in range(self.width):
-                raise ValueError("Slicing endpoint {} is not in range 0 - {}."
-                                 .format(stop, self.width))
-            if value not in range(1 << count):
+                        .format(lower, hex(self.address), value))
+            mask = 1 << lower
+            curr_val = int(self._buffer[0])
+            self._buffer[0] = (curr_val & ~mask) | (value << lower)
+        else:
+            width = upper - lower + 1
+            mask = (1 << width) - 1
+            if value > mask:
                 raise ValueError("Slicing range cannot represent value {}"
                                  .format(value))
-
-            shift = stop if start >= stop else start
-            mask = ((1 << count) - 1) << shift
+            if reverse:
+                value = _reverse_bits(value, width)
             self._debug("Setting bits {}:{} at address {} to {}".format(
-                count + shift, shift, hex(self.address), value))
-            self._buffer[0] = (curr_val & ~mask) | (value << shift)
-        else:
-            raise ValueError("Index must be int or slice.")
+                upper, lower, hex(self.address), value))
+            if width == self.width:
+                self._buffer[0] = value
+            else:
+                curr_val = int(self._buffer[0])
+                self._buffer[0] = ((curr_val & ~(mask << lower)) |
+                                   (value << lower))
 
     def _reordered_setitem(self, value, index):
         """Wrapped version of __setitem__ for better use with
@@ -270,9 +243,14 @@ class Register:
         """
         if hasattr(self, '_fields') and self._fields:
             field_desc = []
-            for k in self._fields.keys():
-                field_desc.append("{}={}".format(k, getattr(self, k)))
+            for k, v in self._fields.items():
+                if v['access'] != 'write-only':
+                    field_desc.append("{}={}".format(k, getattr(self, k)))
+                else:
+                    field_desc.append("{}={}".format(k, 'write-only'))
             return "Register({})".format(", ".join(field_desc))
+        elif self.access == 'write-only':
+            return "Register(value={})".format(self.access)
         else:
             return "Register(value={})".format(self[:])
 
@@ -315,7 +293,7 @@ class Register:
         for k, v in fields.items():
             attrname = _safe_attrname(k)
             safe_fields[attrname] = v
-            doc = _wrap_docstring(v['description'])
+            doc = _wrap_docstring(v.get('description', ''))
             stop = v['bit_offset']
             start = stop + v['bit_width'] - 1
             index = slice(start, stop, -1)
@@ -326,8 +304,8 @@ class Register:
             else:
                 attr_dict[attrname] = property(
                     functools.partial(Register.__getitem__, index=index),
-                    functools.partial(Register._reordered_setitem, index=index),
-                    doc=doc)
+                    functools.partial(Register._reordered_setitem,
+                                      index=index), doc=doc)
         return type("Register" + name, (Register,), attr_dict)
 
     @classmethod
@@ -344,35 +322,8 @@ class Register:
             The number of bits accessed.
 
         """
-
-        if isinstance(index, int):
-            return 1
-        elif isinstance(index, slice):
-            start, stop, step = index.start, index.stop, index.step
-            if step is None or step == -1:
-                if start is None:
-                    start = width - 1
-                if stop is None:
-                    stop = 0
-            elif step == 1:
-                if start is None:
-                    start = 0
-                if stop is None:
-                    stop = width - 1
-            else:
-                raise ValueError("Slicing step is not valid.")
-            if start not in range(width):
-                raise ValueError("Slicing endpoint {} is not in range(0,{})."
-                                 .format(start, self.width))
-            if stop not in range(width):
-                raise ValueError("Slicing endpoint {} is not in range(, {})."
-                                 .format(stop, self.width))
-
-            if start >= stop:
-                count = start - stop + 1
-            else:
-                count = stop - start + 1
-            return count
+        lower, upper, reverse = _calc_index(index, width)
+        return upper - lower + 1
 
 
 class RegisterMap:
@@ -400,12 +351,10 @@ class RegisterMap:
                                "create_subclass can be instantiated")
         if hasattr(buffer, 'view'):
             array32 = buffer.view(dtype='u4')
-            array64 = buffer.view(dtype='u8')
         else:
             array32 = np.frombuffer(buffer=buffer, dtype=np.uint32,
                                     count=self._map_size // 4)
-            array64 = np.frombuffer(buffer=buffer, dtype=np.uint64,
-                                    count=self._map_size // 8)
+
         self._instances = {}
         for k, v in self._register_classes.items():
             if v[2] <= 32:
@@ -422,8 +371,9 @@ class RegisterMap:
                         v[2], k
                     ))
                 continue
+
             self._instances[k] = v[0](
-                address=v[1], width=align_width, buffer=array)
+                address=v[1], width=align_width, buffer=array, access=v[5])
 
     def _set_value(self, value, name):
         self._instances[name][:] = value
@@ -433,9 +383,9 @@ class RegisterMap:
 
     def __repr__(self):
         register_info = []
-        for k, v in self._instances.items():
-            register_info.append(
-                "  {} = {}".format(k, repr(v)))
+        for k, v in \
+                sorted(self._instances.items(), key=lambda x: x[1].address):
+            register_info.append("  {} = {}".format(k, repr(v)))
         return "RegisterMap {\n" + ",\n".join(register_info) + "\n}"
 
     @classmethod
@@ -468,14 +418,15 @@ class RegisterMap:
         name = _safe_attrname(name)
         for k, v in registers.items():
             attrname = _safe_attrname(k)
-            doc = _wrap_docstring(v['description'])
+            doc = _wrap_docstring(v.get('description', ''))
             if 'fields' in v:
                 register_class = Register.create_subclass(
                         attrname, v['fields'], doc)
             else:
                 register_class = Register
             register_classes[attrname] = (
-                register_class, v['address_offset'], v['size'])
+                register_class, v['address_offset'], v['size'],
+                None, None, v['access'])
             upper_range = v['address_offset'] + v['size'] // 8
             if upper_range > address_high:
                 address_high = upper_range
@@ -493,3 +444,5 @@ class RegisterMap:
         attr_dict['_register_classes'] = register_classes
         attr_dict['_map_size'] = address_high
         return type("RegisterMap" + name, (RegisterMap,), attr_dict)
+
+

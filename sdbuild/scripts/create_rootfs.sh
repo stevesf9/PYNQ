@@ -5,6 +5,7 @@ set -e
 
 target=$1
 SRCDIR=$2
+ARCH=$3
 
 fss="proc dev sys"
 echo $QEMU_EXE
@@ -14,6 +15,7 @@ multistrap_opt=
 
 if [ -n "$PYNQ_UBUNTU_REPO" ]; then
   tmpfile=$(mktemp)
+  export PYNQ_UBUNTU_REPO=$(echo ${PYNQ_UBUNTU_REPO} | sed 's\jammy\jammy/$(ARCH)\')
   sed -e "s;source=.*;source=${PYNQ_UBUNTU_REPO};" $multistrap_conf > $tmpfile
   mkdir -p $target/etc/apt/apt.conf.d/
   echo 'Acquire::AllowInsecureRepositories "1";' > $target/etc/apt/apt.conf.d/allowinsecure
@@ -29,17 +31,18 @@ $dry_run sudo -E multistrap -f $multistrap_conf -d $target $multistrap_opt
 sudo chroot / chmod a+w $target
 
 cat - > $target/postinst1.sh <<EOT
-/var/lib/dpkg/info/dash.preinst install
+set -x
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C LANGUAGE=C LANG=C
-/var/lib/dpkg/info/dash.preinst install
+rm -f /var/run/reboot-required
 dpkg --configure -a
 exit 0
 EOT
 cat - > $target/postinst2.sh <<EOT
-/var/lib/dpkg/info/dash.preinst install
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C LANGUAGE=C LANG=C
+rm -f /var/run/reboot-required
+rm -f /var/run/firefox-restart-required
 dpkg --configure -a
 apt-get clean
 
@@ -56,12 +59,27 @@ adduser xilinx adm
 adduser xilinx sudo
 
 fake-hwclock save
+
+# Disable wpa_supplicant service so ifup works correctly
+systemctl mask wpa_supplicant
+
+# Disable hibernation to keep interfaces alive
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+
+# Disable UA Client
+systemctl mask ua-auto-attach.service
+
+# Disable default graphical environment
+systemctl set-default multi-user
+
+# Ensure /usr/local/bin is a directory
+mkdir -p /usr/local/bin
 EOT
 
 if [ -n "$PYNQ_UBUNTU_REPO" ]; then
   cat - >> $target/postinst2.sh <<EOT
-echo "deb http://ports.ubuntu.com/ubuntu-ports bionic main universe" > /etc/apt/sources.list.d/multistrap-bionic.list
-echo "deb-src http://ports.ubuntu.com/ubuntu-ports bionic main universe" >> /etc/apt/sources.list.d/multistrap-bionic.list
+echo "deb http://ports.ubuntu.com/ubuntu-ports jammy main universe" > /etc/apt/sources.list.d/multistrap-jammy.list
+echo "deb-src http://ports.ubuntu.com/ubuntu-ports jammy main universe" >> /etc/apt/sources.list.d/multistrap-jammy.list
 EOT
 fi
 
@@ -73,13 +91,14 @@ EOT
 # Copy over what we need to complete the installation
 $dry_run sudo cp ${QEMU_EXE} $target/usr/bin
 
-$dry_run sudo -E chroot $target bash postinst1.sh
 # Finish the base install
 # Pass through special files so that the chroot works properly
 for fs in $fss
 do
   $dry_run sudo mount -o bind /$fs $target/$fs
 done
+
+$dry_run sudo -E chroot $target bash postinst1.sh
 
 function unmount_special() {
 

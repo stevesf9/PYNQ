@@ -4,8 +4,19 @@ set -x
 set -e
 
 export HOME=/root
-export PYNQ_PYTHON=python3.6
-export PYNQ_JUPYTER_NOTEBOOKS=/home/xilinx/jupyter_notebooks
+export PYNQ_PYTHON=python3
+
+if [ -z "$PYNQ_JUPYTER_NOTEBOOKS" ]; then
+	export PYNQ_JUPYTER_NOTEBOOKS=/home/xilinx/jupyter_notebooks
+fi 
+
+if [ ${ARCH} == 'arm' ]; then
+	export NODE_OPTIONS=--max-old-space-size=2048
+else
+	export NODE_OPTIONS=--max-old-space-size=4096
+fi
+
+source /etc/profile.d/pynq_venv.sh
 
 jupyter notebook --generate-config --allow-root
 
@@ -20,26 +31,8 @@ expire_time = datetime.datetime.now() + datetime.timedelta(days=3650)
 c.NotebookApp.cookie_options = {"expires": expire_time}
 EOT
 
-# Enable widgets
-jupyter nbextension enable --py --sys-prefix widgetsnbextension
-# Install Extensions
-jupyter contrib nbextension install --user
-jupyter nbextensions_configurator enable --user
-jupyter nbextension install rise --py --sys-prefix
-jupyter nbextension enable rise --py --sys-prefix
-# Enable jupyterlab
-jupyter serverextension enable jupyterlab
-
-jupyter labextension install @jupyter-widgets/jupyterlab-manager@1.0.2 --no-build
-jupyter labextension install plotlywidget@1.1.0 --no-build
-jupyter labextension install jupyterlab-plotly@1.1.0 --no-build
-
-if [ ${ARCH} == 'arm' ]; then
-  sed 's:4096:2048:g' -i /usr/local/lib/python3.6/dist-packages/jupyterlab/staging/package.json
-fi
-
-jupyter lab build --minimize=False
-rm -rf /usr/local/share/jupyter/lab/staging
+# In the past, we would enable widgets here
+# As of JupyterLab3 - widgets are now installed with pip
 
 mkdir -p $PYNQ_JUPYTER_NOTEBOOKS
 
